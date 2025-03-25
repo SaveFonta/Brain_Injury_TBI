@@ -1,0 +1,530 @@
+---
+title: "Diagnosen"
+author: "Saverio Fontana"
+date: "2025-03-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# define paths
+# for data import
+import_path <- "02_data/01_raw_data/"
+# for export of inspection objects (spreadsheets)
+inspect_path <- "03_spreadsheets/"
+# for export of clean data
+clean_path <- "02_data/02_clean_data/"
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(data.table)
+library(rio)
+library(dplyr)
+library(tidyr)
+
+```
+
+```{r Diagnosen}
+# function for data import from .csv files
+import_dataset <- function(...) {
+  import_list(..., rbind = TRUE, setclass = "data.table")
+}
+
+# import Diagnosen data set
+Diagnosen <- import_dataset(paste0(import_path, 
+                                "[SDS].[v_Export_Diagnosen_tra_sds].csv"))
+
+#Diagnosen is an Excel w/ many sheets. I will import them all 
+all_data <- import_list(paste0(import_path, "Diagnosen.xlsx"), setclass = "data.table")
+
+# Let's see sheet names
+names(all_data)
+
+# Access a specific sheet
+Diagnosen2 <- all_data[["(SDS).(v_Export_Diagnosen_tra_s"]]
+
+```
+
+The other sheets in the Excel seems more like summary and counting table (e.g. Pivog Table) than useful data, so Iwill stick for the analysis w/ the first sheet. Maybe we can discuss about the others.
+
+```{r Comparing datasets}
+data1 <- Diagnosen
+data2 <- Diagnosen2
+
+# Identify common cols
+common_cols <- intersect(names(data1), names(data2))
+extra_cols <- setdiff(names(data2), names(data1))
+
+# Order cols (just in case)
+data2_ord <- data2[, c(common_cols, extra_cols), with = FALSE]
+
+
+# Key identifier
+key_cols <- c("research_case_id", "Name", "Code")
+
+# Order using key
+data1 <- data1 %>% arrange(across(all_of(key_cols)))
+data2 <- data2 %>% arrange(across(all_of(key_cols)))
+
+dim(data1)
+dim(data2)
+
+#same nmbr of rows, but different columns 
+
+
+# Compare different rows
+missing_in_data2 <- anti_join(data1, data2, by = key_cols)
+missing_in_data1 <- anti_join(data2, data1, by = key_cols)
+
+dim(missing_in_data2)
+dim(missing_in_data1)
+```
+
+Upon inspection, it's clear the same rows are different. The only thing that changes is the formatting, cause there is a blank space at the end of the column name of missing_in_data2.
+
+we can then conclude that it is the same dataframe. For this reason we will work with Diagnosen2, which has more variables. 
+
+
+```{r cleaning1}
+# Create a translation dictionary
+translation_dict <- c(
+  "Code" = "Code", 
+  "Dat" = "Date", 
+  "Displayname" = "Display Name", 
+  "Kat" = "Category", 
+  "Name" = "Name", 
+  "research_case_id" = "Research Case ID", 
+  "research_id" = "Research ID", 
+  "Version" = "Version", 
+  "Blutung" = "Bleeding", 
+  "Fraktur" = "Fracture", 
+  "Subduralblutung" = "Subdural Bleeding", 
+  "Epiduralblutung" = "Epidural Bleeding", 
+  "Subarachnoidalblutung" = "Subarachnoid Bleeding", 
+  "Kontusion" = "Contusion", 
+  "Diffuse Hirnverletzungen und Riss/Shearing" = "Diffuse Brain Injuries and Ripping/Shearing", 
+  "Andere Blutungen" = "Other Bleeding", 
+  "Schädelbasisfraktur" = "Skull Base Fracture", 
+  "Schädelkalottenfaktur" = "Skull Cap Fracture", 
+  "Bewusstlosigkeit" = "Unconsciousness", 
+  "Gehrinerschütterung" = "Concussion", 
+  "Hirnödem" = "Brain Edema", 
+  "Compressio cerebri" = "Brain Compression", 
+  "Gehirnerschütterung Korrekturformel" = "Concussion Correction Formula", 
+  "Gehirnerschütterung Korrektur inkl. Bewusstlosigkeit bei SHT" = "Concussion Correction including Unconsciousness in TBI"
+)
+
+# Overwrite the column names using the translation dictionary
+colnames(Diagnosen2) <- translation_dict[colnames(Diagnosen2)]
+
+# Convert column names to lowercase and replace spaces with underscores
+names(Diagnosen2) <- tolower(gsub(" ", "_", names(Diagnosen2)))
+
+# Rename the column to remove special characters (replace / with _)
+names(Diagnosen2) <- gsub("/", "_", names(Diagnosen2))
+
+# Convert "Date" column to Date type
+Diagnosen2$date <- as.Date(Diagnosen2$date, format = "%Y-%m-%d %H:%M:%S")
+
+
+#Remove some columns: 
+#The "code" column i the ICD-10 (cause the "category" column has only one value: ICD10). I removed both columns, if noone is contrary....
+Diagnosen2 <- Diagnosen2 %>%
+  select(-code, -category)
+
+
+
+
+unique(Diagnosen2$version)
+#the column "version" contains various version of this ICD. I decided to remove also that column
+#Also, consistent with the other script, I only keep the case identifier, not the other one :
+Diagnosen2 <- Diagnosen2 %>%
+  select(-version, -research_id)
+```
+
+
+
+
+
+```{r cleaning2}
+
+#check missing values
+table(is.na(Diagnosen2))
+
+
+# Count NAs per column
+na_count_per_column <- colSums(is.na(Diagnosen2))
+na_count_per_column[na_count_per_column > 0]  # Display columns with NAs
+
+
+# Calculate percentage of NA values per column
+na_percentage <- colSums(is.na(Diagnosen2)) / nrow(Diagnosen2) * 100
+na_percentage[na_percentage > 0]  # Display columns with NAs and their percentage
+
+#the percentage is sooo low. We can inspect these rows. 
+
+na_any_column_df <- Diagnosen2[!complete.cases(Diagnosen2), ]
+#If we want we can keep them cause the missing is only from Date and a super small part ( 0.02%) from display_name. 
+
+#I will remove them for now, I dont think it has a big impact....
+
+#Anyway since some "display_name" miss, we could work with "name" which has 0 missing values. We can discuss it. 
+
+
+# Remove rows with NAs
+Diagn_clean <- Diagnosen2[complete.cases(Diagnosen2), ]
+
+
+# remove duplicate row
+Diagn_clean <- unique(Diagn_clean)
+
+# View the cleaned dataframe
+head(Diagn_clean)
+```
+
+After this cleaning, I looked it up for an automatic translator ( for the column "name"). There are some libraries if we want, but it's a bit of work cause we should setup an API for google translate (not that hard tbh, but we can discuss)
+
+```{r Work on text}
+# Clean up the text data
+Diagn_clean$display_name <- tolower(Diagn_clean$display_name)  # Convert to lowercase
+Diagn_clean$display_name <- gsub("\\s+", " ", Diagn_clean$display_name)  # Remove extra spaces
+Diagn_clean$display_name <- trimws(Diagn_clean$display_name)  # Remove leading and trailing spaces
+
+Diagn_clean$name <- tolower(Diagn_clean$name)  # Convert to lowercase
+Diagn_clean$name <- gsub("\\s+", " ", Diagn_clean$name)  # Remove extra spaces
+Diagn_clean$name <- trimws(Diagn_clean$name)  # Remove leading and trailing spaces
+
+
+# Frequency plot for display_name
+library(ggplot2)
+top_display_names <- as.data.frame(table(Diagn_clean$display_name))
+colnames(top_display_names) <- c("display_name", "count")
+top_display_names <- top_display_names[order(-top_display_names$count), ]
+head(top_display_names, 10)  # Show top 10
+
+ggplot(top_display_names[1:10, ], aes(x = reorder(display_name, -count), y = count)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  coord_flip() +
+  labs(title = "Top 10 Most Common Display Names", x = "Display Name", y = "Count")
+```
+
+```{r Handling IDs}
+# Check for duplicate patient IDs
+dupes <- Diagn_clean %>%
+  group_by(research_case_id) %>%
+  filter(n() > 1)
+print(paste("Number of duplicate patient entries:", nrow(dupes)))
+```
+
+Upon inspection, each case can have multiple rows cause I suppose for each injury they fill out a new row w/ a new description of the injury. 
+
+This lead to the question: how do we handle all these injuries? Do we use the column "name" or "display_name"? 
+
+```{r display_name vs name}
+names <- Diagn_clean %>% filter(display_name != name) %>% select(display_name, name) %>% unique()
+names[1:10,]
+```
+
+They honestly seem super similar.... but this is up to you guys (German is too much)
+I will stick with display_name as Vale did, we can always change this choice.
+
+
+```{r}
+#Drop variable name
+Diagn_clean <- Diagn_clean %>%
+  select(-name)
+
+
+#Aggregates each patient to have a better df
+Diagnosis_cleaned <- Diagn_clean %>%
+  group_by(research_case_id) %>%
+  summarize(
+    date = first(date),  # Keep the first date for each individual
+    bleeding = max(bleeding == 1, na.rm = TRUE),
+    fracture = max(fracture == 1, na.rm = TRUE),
+    subdural_bleeding = max(subdural_bleeding == 1, na.rm = TRUE),
+    epidural_bleeding = max(epidural_bleeding == 1, na.rm = TRUE),
+    subarachnoid_bleeding = max(subarachnoid_bleeding == 1, na.rm = TRUE),
+    contusion = max(contusion == 1, na.rm = TRUE),
+    diffuse_brain_injuries_and_ripping_shearing = max(diffuse_brain_injuries_and_ripping_shearing == 1, na.rm = TRUE),
+    other_bleeding = max(other_bleeding == 1, na.rm = TRUE),
+    skull_base_fracture = max(skull_base_fracture == 1, na.rm = TRUE),
+    skull_cap_fracture = max(skull_cap_fracture == 1, na.rm = TRUE),
+    unconsciousness = max(unconsciousness == 1, na.rm = TRUE),
+    concussion = max(concussion == 1, na.rm = TRUE),
+    brain_edema = max(brain_edema == 1, na.rm = TRUE),
+    brain_compression = max(brain_compression == 1, na.rm = TRUE),
+    concussion_correction_formula = max(concussion_correction_formula == 1, na.rm = TRUE),
+    concussion_correction_including_unconsciousness_in_tbi = max(concussion_correction_including_unconsciousness_in_tbi == 1, na.rm = TRUE),
+    injury_descriptions = paste(unique(display_name), collapse = ", "),  # Concatenate unique injury descriptions
+    num_injuries = n_distinct(display_name)  # Count distinct injury descriptions (new col)
+  )
+
+
+# Convert binary variables to factors (we could also to logical if we wwant)
+Diagnosis_cleaned$bleeding <- as.factor(Diagnosis_cleaned$bleeding)
+Diagnosis_cleaned$fracture <- as.factor(Diagnosis_cleaned$fracture)
+Diagnosis_cleaned$subdural_bleeding <- as.factor(Diagnosis_cleaned$subdural_bleeding)
+Diagnosis_cleaned$epidural_bleeding <- as.factor(Diagnosis_cleaned$epidural_bleeding)
+Diagnosis_cleaned$contusion <- as.factor(Diagnosis_cleaned$contusion)
+Diagnosis_cleaned$other_bleeding <- as.factor(Diagnosis_cleaned$other_bleeding)
+Diagnosis_cleaned$skull_base_fracture <- as.factor(Diagnosis_cleaned$skull_base_fracture)
+Diagnosis_cleaned$skull_cap_fracture <- as.factor(Diagnosis_cleaned$skull_cap_fracture)
+Diagnosis_cleaned$concussion <- as.factor(Diagnosis_cleaned$concussion)
+Diagnosis_cleaned$brain_edema <- as.factor(Diagnosis_cleaned$brain_edema)
+Diagnosis_cleaned$brain_compression <- as.factor(Diagnosis_cleaned$brain_compression)
+Diagnosis_cleaned$concussion_correction_formula <- as.factor(Diagnosis_cleaned$concussion_correction_formula)
+Diagnosis_cleaned$concussion_correction_including_unconsciousness_in_tbi <- as.factor(Diagnosis_cleaned$concussion_correction_including_unconsciousness_in_tbi)
+Diagnosis_cleaned$unconsciousness <- as.factor(Diagnosis_cleaned$unconsciousness)
+Diagnosis_cleaned$subarachnoid_bleeding <- as.factor(Diagnosis_cleaned$subarachnoid_bleeding)
+Diagnosis_cleaned$diffuse_brain_injuries_and_ripping_shearing <- as.factor(Diagnosis_cleaned$diffuse_brain_injuries_and_ripping_shearing)
+
+
+#save the df
+save(Diagnosis_cleaned,
+     file = paste0(clean_path, "Diagnosis_cleaned.RData"))
+export(x = Diagnosis_cleaned,
+       file = paste0(clean_path, "Diagnosis_cleaned.csv"))
+
+```
+
+# Codebook
+
+* **research_case_id**: character, ID of the case (unique identifier).
+* **date**: Date, date when the case or incident occurred (format: YYYY-MM-DD).
+* **bleeding**: factor (binary), indicator for any bleeding present (0 = No, 1 = Yes).
+* **fracture**: factor (binary), indicator for any fracture present (0 = No, 1 = Yes).
+* **subdural_bleeding**: factor (binary), indicator for subdural bleeding (0 = No, 1 = Yes).
+* **epidural_bleeding**: factor (binary), indicator for epidural bleeding (0 = No, 1 = Yes).
+* **subarachnoid_bleeding**: factor (binary), indicator for subarachnoid bleeding (0 = No, 1 = Yes).
+* **contusion**: factor (binary), indicator for contusion (0 = No, 1 = Yes).
+* **diffuse_brain_injuries_and_ripping_shearing**: factor (binary), indicator for diffuse brain injuries and ripping/shearing (0 = No, 1 = Yes).
+* **other_bleeding**: factor (binary), indicator for other types of bleeding not listed separately (0 = No, 1 = Yes).
+* **skull_base_fracture**: factor (binary), indicator for skull base fracture (0 = No, 1 = Yes).
+* **skull_cap_fracture**: factor (binary), indicator for skull cap (calvarium) fracture (0 = No, 1 = Yes).
+* **unconsciousness**: factor (binary), indicator for unconsciousness present (0 = No, 1 = Yes).
+* **concussion**: factor (binary), indicator for concussion (0 = No, 1 = Yes).
+* **brain_edema**: factor (binary), indicator for brain edema (0 = No, 1 = Yes).
+* **brain_compression**: factor (binary), indicator for brain compression (0 = No, 1 = Yes).
+* **concussion_correction_formula**: factor (binary), derived variable for concussion correction based on internal logic (0 = No, 1 = Yes).
+* **concussion_correction_including_unconsciousness_in_tbi**: factor (binary), derived variable for concussion correction including unconsciousness in TBI (0 = No, 1 = Yes).
+* **injury_descriptions**: character, detailed narrative of all diagnosed injuries and conditions associated with the case, in German.
+* **num_injuries**: integer, number of distinct injuries/diagnoses mentioned in *injury_descriptions*.
+
+
+
+
+
+```{r Fast ispection}
+# Histogram of the number of injuries per person
+ggplot(Diagnosis_cleaned, aes(x = num_injuries)) +
+  geom_bar(fill = 'lightgreen', color = 'black') +
+  labs(title = 'Distribution of the Number of Injuries per Person', x = 'Number of Injuries', y = 'Count')
+
+
+
+#Let's see how much each injury occurs
+injury_columns <- c("bleeding", "fracture", "subdural_bleeding", "epidural_bleeding", 
+                    "subarachnoid_bleeding", "contusion", "diffuse_brain_injuries_and_ripping_shearing",
+                    "other_bleeding", "skull_base_fracture", "skull_cap_fracture", 
+                    "unconsciousness", "concussion", "brain_edema", "brain_compression",
+                    "concussion_correction_formula", "concussion_correction_including_unconsciousness_in_tbi")
+
+
+
+#change to long format ( I dont know if necessary)
+Diagnosis_long <- Diagnosis_cleaned %>%
+  select(research_case_id, all_of(injury_columns)) %>%
+  pivot_longer(cols = -research_case_id, names_to = "injury_type", values_to = "has_injury")
+
+
+#Create table w percentages
+summary_tab <- Diagnosis_long %>%
+  group_by(injury_type) %>%
+  summarise(percentage_injured = mean(has_injury == 1) * 100, .groups = 'drop')
+
+# View the summarized table
+summary_tab
+
+
+##save the long fromat
+save(Diagnosis_long,
+     file = paste0(clean_path, "Diagnosis_long.RData"))
+export(x = Diagnosis_long,
+       file = paste0(clean_path, "Diagnosis_long.csv"))
+```
+# Codebook
+
+* **research_case_id**: character, ID of the case (unique identifier), repeated for each injury type related to that case.
+* **injury_type**: character, name of the specific injury or condition assessed for the case (e.g., "bleeding", "fracture", "subdural_bleeding").
+* **has_injury**: integer (binary), indicator whether the specified injury/condition (*injury_type*) is present in the case (0 = No, 1 = Yes).
+
+
+
+
+## Mapping Diagnosen
+
+```{r mapping}
+mapping <- import_dataset(paste0(import_path, 
+                                "[SDS].[v_Export_Mapping_Diagnosen_ICD_to_AIS_tra_sds].csv"))
+
+#First, drop columns "Displayname", "Name" (which are German ddescription of the injury), Kat research_id
+mapping <- mapping %>%
+  select(-Displayname, -Name, -Kat, -research_id)
+
+
+sum(mapping$ICD_AIS_Code == mapping$Code)
+nrow(mapping)
+
+#ICD_AIS_Code and Code are exactly equal.
+#As the other file, I'd drop Code (and so ICD_AIS_Code) and Version
+mapping <- mapping %>%
+  select(-ICD_AIS_Code, -Code, -Version)
+
+# Convert "Date" column to Date type
+mapping$Dat <- as.Date(mapping$Dat, format = "%Y-%m-%d %H:%M:%S")
+```
+
+```{r}
+unique(mapping$AIS_CHAPTER) #note there is a -1
+unique(mapping$ISS_BODY_REGION)
+unique(mapping$MAX_AIS_SEVERITY)
+
+
+#Maybe I am just tired but what are those? Anyway I'd convert to factor
+"mapping$AIS_CHAPTER <- as.factor(mapping$AIS_CHAPTER) 
+mapping$ISS_BODY_REGION <- as.factor(mapping$ISS_BODY_REGION)
+mapping$MAX_AIS_SEVERITY <- as.factor(mapping$MAX_AIS_SEVERITY)"
+
+#Missing?
+table(is.na(mapping))
+
+
+
+# Count NAs per column
+na_count_per_column <- colSums(is.na(mapping))
+na_count_per_column[na_count_per_column > 0]  # Display columns with NAs
+
+
+# Calculate percentage of NA values per column
+na_percentage <- colSums(is.na(mapping)) / nrow(mapping) * 100
+na_percentage[na_percentage > 0]  # Display columns with NAs and their percentage
+
+#the 0.3 % of the dates are missing.... so few. As before I will remove but we can always keep
+
+na_any_column_df <- mapping[!complete.cases(mapping), ]
+
+
+# Remove rows with NAs
+mapping <- mapping[complete.cases(mapping), ]
+
+
+# remove duplicate row
+mapping <- unique(mapping)
+
+```
+
+```{r}
+#Clean up the text data
+mapping$DESCRIPTION <- tolower(mapping$DESCRIPTION)  # Convert to lowercase
+mapping$DESCRIPTION <- gsub("\\s+", " ", mapping$DESCRIPTION)  # Remove extra spaces
+mapping$DESCRIPTION <- trimws(mapping$DESCRIPTION)  # Remove leading and trailing space
+
+# Frequency plot for DESCRIPTION
+library(ggplot2)
+top_display_names <- as.data.frame(table(mapping$DESCRIPTION))
+colnames(top_display_names) <- c("display_name", "count")
+top_display_names <- top_display_names[order(-top_display_names$count), ]
+head(top_display_names, 10)  # Show top 10
+
+ggplot(top_display_names[1:10, ], aes(x = reorder(display_name, -count), y = count)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  coord_flip() +
+  labs(title = "Top 10 Most Common Display Names", x = "Display Name", y = "Count")
+
+mapping_cleaned <- mapping
+
+
+#save the df
+save(mapping_cleaned,
+     file = paste0(clean_path, "mapping_cleaned.RData"))
+export(x = mapping_cleaned,
+       file = paste0(clean_path, "mapping_cleaned.csv"))
+```
+
+
+# Codebook
+
+* **AIS_CHAPTER**: integer, represents the chapter number of the AIS (Abbreviated Injury Scale) classification.
+* **Dat**: Date, the date when the injury or event occurred (format: YYYY-MM-DD).
+* **DESCRIPTION**: character, a detailed description of the injury or condition.
+* **ISS_BODY_REGION**: integer, represents the body region affected by the injury based on AIS classification (for example, 4 could indicate a specific region like "limbs").
+* **MAX_AIS_SEVERITY**: integer, the maximum severity score of the injury on the AIS scale (range 0 to 6).
+* **research_case_id**: character, ID of the case, which uniquely identifies the patient or incident.
+
+
+```{r}
+# Check for duplicate patient IDs
+dupes <- mapping %>%
+  group_by(research_case_id) %>%
+  filter(n() > 1)
+print(paste("Number of duplicate patient entries:", nrow(dupes)))
+```
+So almost each patient has more than 1 row.
+At this point there are so many ways to format the table to have a row for each patients that maybe we need to discuss about it. Here are some ideas: 
+
+```{r}
+
+# One row per patient
+# Create a summary table with unique research_case_id for each row
+patient_summary <- mapping %>%
+  group_by(research_case_id) %>%
+  summarise(
+    
+    # Get the first injury date for the patient
+    latest_injury_date = min(Dat, na.rm = TRUE),
+    
+    # Calculate the number of distinct body regions injured
+    distinct_body_regions_injured = n_distinct(ISS_BODY_REGION),
+    
+    # take  max severity per patient
+    max_severity = max(MAX_AIS_SEVERITY, na.rm = TRUE),
+    
+    #OTHER IDEAS?? 
+    
+    # Sum of injuries 
+    sum_injuries = sum(ISS_BODY_REGION != 0, na.rm = TRUE),  # don't count the zero
+    
+    # Concatenate all injury descriptions for the same patient
+    all_injury_descriptions = paste(unique(DESCRIPTION), collapse = "; ")
+  ) %>%
+  ungroup()
+
+# View the resulting table
+head(patient_summary)
+
+
+
+```
+
+
+Or even something like that with the dummyes but idk
+```{r}
+patient_injury_counts_by_severity <- mapping %>%
+  group_by(research_case_id) %>%
+  summarise(
+    count_severity_0 = sum(MAX_AIS_SEVERITY == 0, na.rm = TRUE),
+    count_severity_1 = sum(MAX_AIS_SEVERITY == 1, na.rm = TRUE),
+    count_severity_2 = sum(MAX_AIS_SEVERITY == 2, na.rm = TRUE),
+    count_severity_3 = sum(MAX_AIS_SEVERITY == 3, na.rm = TRUE),
+    count_severity_4 = sum(MAX_AIS_SEVERITY == 4, na.rm = TRUE),
+    count_severity_5 = sum(MAX_AIS_SEVERITY == 5, na.rm = TRUE),
+    count_severity_6 = sum(MAX_AIS_SEVERITY == 6, na.rm = TRUE),
+  ) %>%
+  ungroup()
+
+```
+
+
+
+
+

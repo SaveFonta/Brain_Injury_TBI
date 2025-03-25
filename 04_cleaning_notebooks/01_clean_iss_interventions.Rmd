@@ -1,0 +1,312 @@
+---
+title: "Cleaning and Exploration of ISS and Interventions Datasets"
+output: html_document
+date: "2025-03-02"
+author: vjohner
+---
+
+```{r setup, include=FALSE}
+# define paths
+# for data import
+import_path <- "02_data/01_raw_data/"
+# for export of inspection objects (spreadsheets)
+inspect_path <- "03_spreadsheets/"
+# for export of clean data
+clean_path <- "02_data/02_clean_data/"
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(data.table)
+library(rio)
+library(stringi)
+```
+
+## ISS
+
+```{r iss}
+# function for data import from .csv files
+import_dataset <- function(...) {
+  import_list(..., rbind = TRUE, setclass = "data.table")
+}
+
+# import iss data set
+iss <- import_dataset(paste0(import_path, 
+                                "[SDS].[v_Export_Score_ISS_from_AIS_berechnet_tra_sds].csv"))
+
+
+# we only need the case identifier (for now)
+iss <- select(iss, research_case_id, ISS)
+iss_clean <- rename(iss, iss = ISS)
+# missing values
+table(is.na(iss_clean))
+# duplicates
+table(duplicated(iss_clean$research_case_id))
+
+# save
+save(iss_clean, 
+     file = paste0(clean_path, "iss_clean.RData"))
+export(x = iss_clean,
+       file = paste0(clean_path, "iss_clean.csv"),
+       overwrite = TRUE)
+```
+
+Nothing really to do on this dataset: no missing values, not duplicates, nicely formatted. We drop research_id for now and convert the ISS column to lowercase for coherence, otherwise no operation necessary on the dataset 'iss'.
+
+Codebook:
+
+* __research_case_id__: character, ID of case.
+* __iss__: integer, Injury Severity Score (integer 1-75; ISS = (AIS1)^2 + (AIS2)^2 + (AIS3)^2).
+
+
+## (Surgical) Interventions and Procedures
+
+We have two datasets containing data about interventions and procedures. The dataset `interventions1` contains surgical interventions on the head or brain (I think, no expert --> Levy?), whereas `interventions2` contains a lot (too many, we'll see after cleaning) of procedures performed on the patient, which are not (necessarily) surgical. E.g., they include also infusions, controls, and scans (not sure how useful they are for the final analysis if we have so many). We'll start with `interventions1`:
+
+```{r interventions1}
+interventions1 <- import_dataset(paste0(import_path,
+                             "TBI_interventions.xlsx"))
+
+# Rename the column to standard identifier
+interventions1 <- interventions1 %>% rename(research_case_id = "Zeilenbeschriftungen")
+
+# Remove unnecessary "Ja/Nein" in column names
+colnames(interventions1) <- str_replace_all(colnames(interventions1), " Ja/Nein", "")
+
+# Check for duplicate patient IDs
+dupes <- interventions1 %>%
+  group_by(research_case_id) %>%
+  filter(n() > 1)
+print(paste("Number of duplicate patient entries:", nrow(dupes)))
+
+# Check for missing values
+table(is.na(interventions1))
+
+```
+
+
+
+Let's continue with `interventions2`. As before, we drop research_id. Also, we drop the variable "Kat", since it contains only the value "CHOP" and is thus hardly informative. For now, we also drop the date column (should we need it later easy to add). We also remove the variable KapitelC14, I couldn't find out much about what information it contains (maybe interventions in the face?). A quick assurance of it's irrelevance with the client and/or Levy maybe useful. The binary variable HighInterest contains mostly 1. The 0 are limited to "DefSurg" and "Burn" interventions. I don't see the point in considering this variable, but again a quick reassurance can't hurt.
+
+```{r interventions2}
+interventions2 <- import_dataset(paste0(import_path,
+                             "[SDS].[v_Export_Procedure_Drg_tra_sds].csv"))
+
+# Check variable Kat
+table(interventions2$Kat)
+
+# Check variable KapitelC14
+table(interventions2$KapitelC14)
+
+# Drop research_id, Kat, 
+interventions2 <- select(interventions2, -c(research_id, Kat, Therapy_dat, Version, KapitelC14, HighInterest))
+
+# Consider which name column we need
+names <- interventions2 %>% filter(Displayname != Name) %>% select(Displayname, Name) %>% unique()
+names[1:10,]
+
+```
+
+Here we encounter the problem of choosing between the columns "Name" and "Displayname". They contain similar, but often different entries. However, they often only differ by details that are irrelevant wrt content. On closer inspection, it looks as if Displayname contains generic and more consistent values, with Name showing small differences even for identical procedures. Since the granularity is probably already too fine for our analysis anyway, we choose Displayname, which is slightly less granular and requires less cleaning. It is also noticeable that many Umlauts were not read in correctly. We address this as well and thus obtain more consistent values.
+
+```{r interventions3}
+# Drop variable Name, rename columns
+interventions2 <- interventions2 %>% 
+  select(research_case_id, Intervention, Code, Displayname) %>%
+  rename("procedure_name" = Displayname) %>%
+  rename("intervention" = Intervention) %>%
+  rename("procedure_code" = Code)
+
+# Address Umlaut problem
+interventions2$procedure_name <- stri_trans_general(interventions2$procedure_name, "de-ASCII")
+
+# Better, but still question marks. Several approaches failed, I remove them "manually"
+interventions2$procedure_name <- gsub("�", "", interventions2$procedure_name)
+
+# Check if it worked
+head(unique(interventions2$procedure_name)) # Looks good
+unique_chars <- unique(grepl("�", interventions2$procedure_name)) # DO NOT RUN BEFORE HAVING RUN THE ABOVE STEPS; MIGHT BREAK R
+print(unique_chars) # should return false if it worked
+
+```
+Since several approaches did not work, I decided to just remove the Umlaute. This shouldn't be a problem, since it's performed uniformly over all values and leaves the procedures easy identifiable. 
+
+After some cleaning, the data are still pretty messy. Since there are a lot of small string differences, I suspect that meticulous cleaning would involve manually checking procedures (here doable but probably not worth it). Alternatively, and imo a better solution would be to drop names (maybe keep it as a library, but not for analysis) and use the code variable. Depending on the final usecase we can choose the required granularity (and thus also solve the granularity issue of having `r length(unique(interventions2$procedure_code))` unique procedures at different levels of granularity). The encoding has the general format XX.XX.XX For now, a granularity of XX.X seems enough, maybe even just the first number (Check how many unique procedures we get with each level of granularity). The encoding can be found on wikipedia: https://en.wikipedia.org/wiki/ICD-9-CM_Volume_3
+
+```{r interventions4}
+# Ensure that the procedure_code column is of consistent format and implement three levels of granularity as new cols
+interventions2 <- interventions2 %>%
+  mutate(procedure_code_level1 = gsub("^([0-9])\\.", "0\\1.", procedure_code),
+         procedure_code_level2 = sub("^(\\d+\\.\\d).*", "\\1", procedure_code_level1),
+         procedure_code_level3 = sub("\\..*", "", procedure_code_level1),
+         procedure_code_level4 = substr(procedure_code_level1, 1, 1)) %>%
+  select(-procedure_code)
+
+# Check how many unique procedure codes exist at different granularities
+length(unique(interventions2$procedure_code_level1)) # Full granularity
+length(unique(interventions2$procedure_code_level2)) # XX.X level
+length(unique(interventions2$procedure_code_level3)) # XX level
+length(unique(interventions2$procedure_code_level4)) # X level
+
+length(unique(interventions2$intervention)) # promising
+table(interventions2$intervention == "") # not
+interventions2 <- interventions2 %>% select(-intervention)
+
+```
+
+Indeed, it seems that even at the XX level we might have too many, XX.X definitely seems too granular, but I will leave it in the dataset for now. I suggest we decide which one we use (if any) at a later point and leave all in the dataset for now. Note that we do have a column called "intervention", which looks promising on first sight, but unfortunately contains so many missing values without any structure such that it won't help us (we thus drop it).
+
+To wrap it up, we check and handle missing values, duplicates, (possibly) filtering rare procedures, and merge the datasets:
+```{r interventions5}
+
+# Ensure missing values are properly detected (handling empty strings)
+interventions2 <- interventions2 %>%
+  mutate(across(everything(), ~na_if(., "")))
+# Check missing values across all columns
+colSums(is.na(interventions2))
+# Check if missing names have valid procedure codes
+missing_procedures <- interventions2 %>%
+  filter(is.na(procedure_name)) %>%
+  select(procedure_code_level3) %>%
+  distinct()
+# Since they do have valid codes, we fill them with names from non-missing rows
+interventions2 <- interventions2 %>%
+  group_by(procedure_code_level3) %>%
+  mutate(procedure_name = ifelse(is.na(procedure_name),
+                                 first(na.omit(procedure_name)), 
+                                 procedure_name)) %>%
+  ungroup()
+# Check if all missing values are handled
+colSums(is.na(interventions2)) # looks good
+
+# Count occurrences of each procedure per patient
+interventions2 <- interventions2 %>%
+  group_by(research_case_id, procedure_code_level3) %>% # CHANGE THIS TO DESIRED LEVEL!!!
+  summarise(procedure_count = n(), .groups = "drop")
+
+# Filtering rare procedures
+procedure_counts <- interventions2 %>%
+  count(procedure_code_level3, sort = TRUE)
+# Identify rare procedures (appearing <5 times)
+rare_procedures <- procedure_counts %>%
+  filter(n < 5) %>%
+  pull(procedure_code_level3)
+# Remove rare procedures (NEED TO DISCUSS FIRST, NOT SURE)
+# interventions2 <- interventions2 %>%
+#   filter(!procedure_code_level3 %in% rare_procedures)
+
+```
+Note that we take granularity level 3 and drop the rest here. Of course, this can easily be changed again based on our requirements. For now, I leave it like that; note that we would need to change the uploaded datasets on polybox though! (IMPORTANT!)
+Also, I suggest the possibility of filtering out procedures that are "rare" in some sense, i.e., not performed very often (e.g., below a threshold of 5 in the whole dataset; this threshold would classify 12 out of 91 using the code level 3). I did not perform this step yet, I've prepared the code though, we would just need to delete the #. This would also affect the datasets on polybox. (IMPORTANT!) My thinking to filter them was influenced by potential overfitting, better interpretability with less procedures, efficiency and domain relevance.
+
+Since both dataset `interventions1` and `interventions2` contain data about procedures or interventions, it might make sense to merge them. However, my suspicion is that `interventions1` contains surgical procedures, whereas `interventions2` does not. I will thus merge them (keeping track of the origin with "surgical" and "mixed", which may be flawed!) but export all datasets separately as well. Which we will use (if any) can thus be decided at a later point in the project (also, which format).
+
+```{r interventions6}
+
+# Convert interventions2 into wide format
+interventions2_wide <- interventions2 %>% 
+  pivot_wider(
+    id_cols = research_case_id,
+    names_from = procedure_code_level3,
+    values_from = procedure_count,
+    values_fill = 0
+  ) %>%
+  mutate(across(everything(), as.character))
+
+# Merge with interventions1 (which is already wide)
+merged_interventions_wide <- left_join(interventions1, interventions2_wide, by = "research_case_id")
+
+
+# For merging in long format, add dataset indicator (maybe I'm wrong!)
+interventions1 <- interventions1 %>% mutate(source = "surgical", procedure_count = 1)
+interventions2 <- interventions2 %>% mutate(source = "mixed")
+
+# Convert interventions1 procedures to long format (only procedures where value == 1)
+interventions1_long <- interventions1 %>%
+  pivot_longer(
+    cols = -c(research_case_id, source, procedure_count), 
+    names_to = "procedure", 
+    values_to = "performed"
+  ) %>%
+  filter(performed == 1) %>%
+  select(-performed)
+
+# Standardize column names for interventions2
+interventions2_long <- interventions2 %>%
+  select(research_case_id, source, procedure_code_level3, procedure_count) %>% # CHANGE LEVEL!
+  rename(procedure = procedure_code_level3)
+
+# Merge both datasets and handle data type
+merged_interventions_long <- bind_rows(interventions1_long, interventions2_long)
+merged_interventions_long$procedure_count <- as.integer(merged_interventions_long$procedure_count)
+
+# Prepare for export
+interventions1_long <- interventions1_long %>% select(-procedure_count)
+interventions1_wide <- interventions1 %>% select(-c(source, procedure_count))
+interventions2_long <- interventions2 %>% select(-source)
+
+## Export
+# interventions1 in long format
+save(interventions1_long, 
+     file = paste0(clean_path, "interventions1_long.RData"))
+export(x = interventions1_long,
+       file = paste0(clean_path, "interventions1_long.csv"),
+       overwrite = TRUE)
+# interventions1 in wide format
+save(interventions1_wide, 
+     file = paste0(clean_path, "interventions1_wide.RData"))
+export(x = interventions1_wide,
+       file = paste0(clean_path, "interventions1_wide.csv"),
+       overwrite = TRUE)
+
+# interventions2 in long format
+save(interventions2_long, 
+     file = paste0(clean_path, "interventions2_long.RData"))
+export(x = interventions2_long,
+       file = paste0(clean_path, "interventions2_long.csv"),
+       overwrite = TRUE)
+# interventions2 in wide format
+save(interventions2_wide, 
+     file = paste0(clean_path, "interventions2_wide.RData"))
+export(x = interventions2_wide,
+       file = paste0(clean_path, "interventions2_wide.csv"),
+       overwrite = TRUE)
+
+# merged interventions in long format
+save(merged_interventions_long, 
+     file = paste0(clean_path, "merged_interventions_long.RData"))
+export(x = merged_interventions_long,
+       file = paste0(clean_path, "merged_interventions_long.csv"),
+       overwrite = TRUE)
+# merged interventions in wide format
+save(merged_interventions_wide, 
+     file = paste0(clean_path, "merged_interventions_wide.RData"))
+export(x = merged_interventions_wide,
+       file = paste0(clean_path, "merged_interventions_wide.csv"),
+       overwrite = TRUE)
+
+
+```
+Note that I added a count column to `interventions1` filled with 1s in order to merge them. The dataset `interventions1` has no duplicates in research_case_id, meaning no procedure was performed twice on the same patient/case (in contrast to `interventions2`).
+
+Codebook:
+
+* __research_case_id__: character, ID of case.
+* __source__: character, values "surgical" and "mixed", original dataset.
+* __procedure__: character, either the name ("surgical") or code ("mixed") of the performed procedure.
+* __procedure_count__: integer, # times procedure was performed.
+
+Note that in wide format there are a lot more columns with the names of the procedures or the according code values. For consistency, they are all coded as characters.
+
+
+
+### ** Open Questions (maybe Levy or Client for qualitative issues) **
+- **Do we need both surgical (`interventions1`) and non-surgical (`interventions2`) interventions together, or should we analyze them separately? I am right with this distinction?**  
+- **What level of granularity should we use for procedure codes? XX? XX.X? Just X?**  
+- **Should we remove rare procedures (<5 occurrences), or do they provide meaningful insights?**  
+- **Does the procedure categorization (surgical vs. mixed) make sense, or should we reconsider?**  
+
+---
+
+
+
