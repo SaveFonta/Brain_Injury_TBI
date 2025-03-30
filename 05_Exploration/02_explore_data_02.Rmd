@@ -1,0 +1,344 @@
+---
+title: "Exploration of Cases, ISS, Interventions"
+output: html_document
+date: "2025-03-07"
+author: jaegerl
+---
+
+```{r setup, include=FALSE}
+# define paths
+# for data import
+import_path <- "02_data/01_raw_data/"
+# for export of inspection objects (spreadsheets)
+inspect_path <- "03_spreadsheets/"
+# for export of clean data
+clean_path <- "02_data/02_clean_data/"
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(data.table)
+library(rio)
+```
+
+## The Research Question
+
+Main points:
+* The research question is something along the lines of `Does TBI affect the pathophysiology of polytrauma?`, understood as follows: Consider two polytrauma patients who both have the same clinical characteristics, including the types of injuries, but one patient has TBI and the other does not. How do the pathophysiological parameters of these two patients differ?
+* The population of interest the polytrauma population, defined by the the AIS (Abbreviated Injury Scale) system: Polytrauma corresponds to an AIS score of at least 3 in at least two body regions.
+* By "pathophysiological parameters", we mean the degree of dysfunction in major systems involved in polytrauma (bleeding, coagulopathy, fever, soft tissue damage). 
+* An important covariate will be the severity of the TBI. The idea is to quantify it by the degree of unconsciousness as measured by the Glasgow Coma Scale (GCS), the injury (presence/type of intracranial bleeding), and any (surgical) intervention. To this end, we are supposed to explore the various relationships between these variables.
+
+Some thoughts on the research question:
+* If we really want to isolate the effect of TBI on the pathophysiology, we would need some controls in addition to the TBI patients, i.e., polytrauma patients without TBI. One idea could then be to quantify the TBI effect by using something like regression models, propensity score matching, and so on.
+* On the other hand, it might be really difficult to extract a reasonable control population, since we would have to take into account the location and severity of the injuries. However, this could be achieved with the AIS and the different body regions.
+* Alternatively, we could limit the analysis to patients with TBI and try to model the relationship between TBI severity and the  pathophysiological parameters.
+
+
+## Interventions
+
+### Inspect Distribution
+
+```{r interventions}
+# function for data import from .csv files
+import_dataset <- function(...) {
+  import_list(..., rbind = TRUE, setclass = "data.table")
+}
+
+# import cleaned interventions dataset
+load(paste0(clean_path, "Interventions/interventions1_long.RData"))
+load(paste0(clean_path, "Interventions/interventions1_wide.RData"))
+load(paste0(clean_path, "Interventions/interventions2_long.RData"))
+load(paste0(clean_path, "Interventions/interventions2_wide.RData"))
+
+# see what kind of interventions are listed
+table(interventions1_long$procedure, useNA = "always")
+```
+All of these interventions are surgeries of the brain or skull.
+
+Check distribution/co-occurrence of interventions.
+
+```{r interventions2}
+# how many different interventions did the single cases receive?
+barplot(height = table(rowSums(interventions1_wide[, -1])),
+        main = "Distribution of interventions", xlab = "Number of interventions", ylab = "Number of cases")
+```
+
+Most of the enlisted cases did not receive any intervention at all. 
+
+
+### What are these interventions anyway? ####
+
+```{r interventions3}
+colnames(interventions1_wide)
+# these are typical neurosurgical interventions for TBI patients
+# for the dataset interventions2, let's see what the codes in the raw dataset were
+interventions2 <- import_dataset(paste0(import_path,
+                                        "[SDS].[v_Export_Procedure_Drg_tra_sds].csv"))
+n_distinct(interventions2$Name)
+# ok, these are way too many. let's inspect them
+intervention_names <- interventions2 |> 
+  select(Name) |> 
+  distinct() |> 
+  arrange(Name)
+```
+
+Indeed, `interventions2` includes all forms of surgical procedures, non-surgical procedures, imaging studies (CT and MRI).
+
+
+### Compare with (Included) Cases
+
+What are the cases in this table anyway? Let's compare with the dataset of cases.
+
+```{r cases}
+# load cases (the spreadsheet has a few weird sheets)
+diagnoses <- suppressWarnings(import_list(paste0(import_path, "Diagnosen.xlsx"), 
+                                          setclass = "data.table", 
+                                          guess_max = 50000))
+# split into what could be relevant
+diaglist <- diagnoses[[1]]
+cases <- diagnoses[[2]]
+included_cases <- diagnoses[[3]]
+# make column names consistent
+colnames(included_cases)[1] <- "research_case_id"
+colnames(cases)[1] <- "research_case_id"
+# remove the "Grand Total" observation
+cases <- cases[research_case_id != "Grand Total"]
+
+# what is the difference between cases (Pivot Table) and included cases (Pivottable nur Eingeschlossene)?
+# inspect duplicates
+nrow(included_cases[, .(n = .N), by = .(research_case_id)][n > 1])
+nrow(cases[, .(n = .N), by = .(research_case_id)][n > 1])
+# there are no duplicated entries. are all cases of included_cases also in the cases dataset?
+sum(!(included_cases$research_case_id %in% cases$research_case_id))
+# ok, this means that we can introduce a label for included cases in the cases dataset
+cases[, included := as.numeric(research_case_id %in% included_cases$research_case_id)]
+# for some reason, "Blutung korrigiert" and "Fraktur korrigiert" are not present in the cases dataset.
+identical(cases[included == 1, -c("included", "Blutung korrigiert", "Fraktur korrigiert")], 
+          included_cases)
+# at least, the datasets are consistent.
+
+# how many cases did not receive any intervention at all?
+noint <- interventions1_wide[rowSums(interventions1_wide[, -1]) == 0]
+nrow(noint)
+# well, actually most of the cases had no intervention!
+
+# how many of the included cases are not in the interventions dataset and vice versa?
+cat(paste0("case with documentation of interventions, but not among included patients: ", 
+           nrow(included_cases[!(research_case_id %in% interventions1_wide$research_case_id)])))
+cat(paste0("case of an included patient, but with no documentation of intervention: ", 
+           nrow(interventions1_wide[!(research_case_id %in% included_cases$research_case_id)])))
+
+# do the IDs of the first and second sheet match?
+length(setdiff(cases$research_case_id, diaglist$research_case_id))
+length(setdiff(diaglist$research_case_id, cases$research_case_id))
+# ok, so the first sheet contains the diagnoses of all cases in the second sheet.
+# what about the third sheet: are there any cases that are not present in the second sheet?
+length(setdiff(included_cases$research_case_id, cases$research_case_id))
+# nice, so "Pivot Table nur Eingeschlossene" is a subset of "Pivot Table"
+```
+
+This is weird: The interventions dataset contains `r nrow(interventions1_wide)` cases, while the included patients dataset contains `r nrow(included_cases)`. What is the difference between the two? However, it could be that the interventions dataset only considers the first case for each patient. To check this, we need the patients IDs.
+
+```{r cases2}
+patients <- import_dataset(paste0(import_path, 
+                                  "[SDS].[v_Export_Patient_Unfall_SpitalAufenthalt_tra_sds].csv"))
+# get patients with multiple cases
+mult_cases <- patients[, .(n_cases = .N,
+                           research_case_id), 
+                       by = .(research_id)
+][n_cases > 1]
+# count the number of cases with documented intervention that belong to patients
+# with multiple cases
+sum(interventions1_wide$research_case_id %in% mult_cases$research_case_id)
+# ok, the interventions are definitely not documented for patients with one single
+# case only...
+```
+
+OK, so this is not the case...
+
+
+### What do the Variables Mean?
+
+It seems like `Sum of Blutung` counts the types of intracranial hemorrhage present in every case. Is this consistent with the entries in the corresponding columns?
+```{r bleeding}
+test <- cases[`Sum of Blutung` != `Sum of Subduralblutung` +
+                `Sum of Epiduralblutung` +
+                `Sum of Subarachnoidalblutung` +
+                `Sum of Andere Blutungen`]
+nrow(test)
+# well, it's not. maybe they added other columns?
+test <- cases[`Sum of Blutung` != `Sum of Subduralblutung` +
+                `Sum of Epiduralblutung` +
+                `Sum of Subarachnoidalblutung` +
+                `Sum of Andere Blutungen` +
+                `Sum of Kontusion` +
+                `Sum of Diffuse Hirnverletzungen und Riss/Shearing`]
+nrow(test)
+# what?! they also added brain injury to intracranial bleeding?
+# are the presence indicators at least consistent?
+sum(cases$`Blutung korrigiert Ja/Nein` != as.numeric(cases$`Sum of Blutung` > 0))
+# this is consistent
+sum(cases$`Fraktur korrigiert Ja/Nein` != as.numeric(cases$`Sum of Fraktur` > 0))
+# this is also consistent.
+
+# are there any redundant columns?
+sum(cases$`Sum of Blutung` != cases$`Blutung korrigiert`)
+# ok, these two columns are the same.
+sum(cases$`Sum of Fraktur` != cases$`Fraktur korrigiert`)
+# these too.
+
+# are fractures at least consistently defined, as basilar (Schädelbasis) and/or vault (Schädelkalotte) fractures?
+nrow(cases[`Sum of Fraktur` != `Sum of Schädelbasisfraktur` +
+             `Sum of Schädelkalottenfaktur`])
+# they are!
+```
+
+
+### ISS and AIS scores
+
+Let's check the consistency of the values in the AIS and ISS datasets.
+
+```{r iss}
+# import the ISS scores
+load(paste0(clean_path, "iss_clean.RData"))
+
+# check the distribution of ISS values
+summary(iss_clean$iss)
+# I thought the minimum possible value was 1? how come?
+
+# let's first check who these patients are.
+# how many cases have na ISS but no intervention and vice versa?
+cat(paste0("ISS, but no intervention: ", 
+           sum(!(iss_clean$research_case_id %in% 
+                   interventions1_wide$research_case_id))))
+cat(paste0("Intervention, but no ISS: ", 
+           sum(!(interventions1_wide$research_case_id %in% 
+                   iss_clean$research_case_id))))
+# this is so strange... are the ones without interventions also the ones with 
+# zero ISS?
+nrow(iss_clean[iss == 0])
+nrow(iss_clean[!(research_case_id %in% interventions1_wide$research_case_id)])
+# there seems to be no relationship.
+
+# is there a documented ISS at least for all included cases?
+nrow(included_cases[!(research_case_id %in% iss_clean$research_case_id)])
+# there is a very small number of included cases without ISS. maybe we can 
+# just neglect these.
+```
+
+Can we at least replicate the calculation of the ISS values from the AIS scores?
+
+```{r iss2}
+# AIS scores of the individual patients.
+ais_mapping <- import_dataset(paste0(import_path,
+                                     "[SDS].[v_Export_Mapping_Diagnosen_ICD_to_AIS_tra_sds].csv"))
+table(ais_mapping$MAX_AIS_SEVERITY)
+# this column seems to contain the AIS values
+table(ais_mapping$AIS_CHAPTER)
+# this one seems to contain the body AIS region, but what is -1?
+ais_mapping[AIS_CHAPTER == -1, (DESCRIPTION)] |> 
+  unique() |> 
+  head(20)
+# these are general/diffuse problems, not localized traumas. do these also carry 
+# scores like the other chapters?
+ais_mapping[AIS_CHAPTER == -1, (MAX_AIS_SEVERITY)] |> 
+  table(useNA = "always")
+# interesting - these only carry values of zero - they are irrelevant for the
+# calculation of the ISS!
+# is the converse also true, do the patients with an ISS of zero only have 
+# AIS scores in chapter -1? let us check if AIS values of zero are possible
+# outside chapter -1:
+ais_mapping[AIS_CHAPTER != -1 & MAX_AIS_SEVERITY == 0,
+            .(AIS_CHAPTER,
+              DESCRIPTION)] |> 
+  head(20)
+# this makes no sense - why are there values of zero? I thought the minimum
+# possible value was 1?
+
+# for calculation of ISS scores, note that one does NOT use the usual AIS regions,
+# but 6 unions of AIS regions, which are then called "ISS regions". these are probably
+# encoded in the ISS_BODY_REGION column:
+table(ais_mapping$ISS_BODY_REGION, useNA = "always")
+# again, there is a region zero - is this equivalent to AIS region -1?
+unique(ais_mapping[, .(ISS_BODY_REGION, AIS_CHAPTER)]
+       )[order(ISS_BODY_REGION, AIS_CHAPTER)]
+# let's inspect in more detail
+ais_mapping[ISS_BODY_REGION == 6, .(DESCRIPTION,
+                                    ISS_BODY_REGION,
+                                    AIS_CHAPTER)] |> 
+  unique() |> 
+  head(20)
+# ok, this may make sense: external wounds are collected in ISS chapter 6,
+# and these can affect any region of the body!
+
+# calculate ISS values
+ais_values <- ais_mapping[, .(research_case_id,
+                              MAX_AIS_SEVERITY,
+                              ISS_BODY_REGION)] |> 
+  unique()
+# keep highest AIS value for each body region
+ais_values <- ais_values[, ais_max := max(MAX_AIS_SEVERITY),
+                         by = .(research_case_id,
+                                ISS_BODY_REGION)
+                         ][ais_max == MAX_AIS_SEVERITY]
+ais_values <- unique(ais_values[, .(research_case_id,
+                                    ISS_BODY_REGION,
+                                    ais_max)])
+# keep three regions with highest scores
+ais_values[, ais_rank := rank(-ais_max, ties.method = "random"),
+           by = .(research_case_id)]
+ais_values <- ais_values[ais_rank %in% 1:3]
+# count number of worst regions for every case
+ais_values[, n_regions := .N,
+           by = .(research_case_id)]
+# calculate ISS
+ais_values[, iss_calc := sum(ais_max^2), 
+           by = .(research_case_id)]
+
+# check with clean ISS data set
+iss_compare <- merge(iss_clean,
+                     y = ais_values[, .(research_case_id,
+                                        iss_calc,
+                                        n_regions)] |> 
+                       unique(),
+                     by = "research_case_id",
+                     all.x = TRUE)
+# how many discrepancies?
+nrow(iss_compare[iss != iss_calc])
+# yay, the values match!
+```
+
+
+## Overview of Case IDs
+
+How large are the discrepancies in the ID variable `research_case_id` between the different datasets?
+
+```{r caseids}
+datasets <- list(all_cases = cases,
+                 included_cases = included_cases,
+                 interventions = interventions1_wide,
+                 iss = iss_clean) |> 
+  lapply(`[[`, "research_case_id")
+# what are the total numbers of IDs?
+sapply(datasets, length)
+# how large are the mismatches?
+mismatch_table <- sapply(datasets,
+                         \(indices1) {
+                           sapply(datasets, 
+                                  \(indices2) length(setdiff(indices1,
+                                                             indices2)))
+                         })
+mismatch_table
+```
+Reading example: Among the `included_cases`, there are `r mismatch_table[3, 2]` IDs with no documented interventions, and `r mismatch_table[4, 2]` IDs with no documented ISS.
+
+
+## Questions
+
+* Case IDs are inconsistent across the different datasets (interventions, included patients/diagnoses, ISS scores). What is the reason for this? Which dataset should we use?
+* Is it true that we want to use a control population with polytrauma, but no TBI? If so, where would we get this population from? Does the client prefer to compare TBI to non-TBI or do they prefer to investigate the impact of the degree of TBI?
+* How relevant are the non-TBI interventions to the analysis?
+* A codebook for the interventions dataset would be extremely useful. The variable names do not seem  to match the content:
+  * `Sum of Blutung` includes brain contusions and other forms of brain tissue damage in addition to the different types of bleeding. Is that correct?
+  * How is `Sum of Gehrinerschütterung` (sic) defined? `Sum of Fraktur` is consistently defined as basilar and/or vault fracture.

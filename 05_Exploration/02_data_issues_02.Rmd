@@ -1,0 +1,298 @@
+---
+title: "Data Issues: Missing GCS, AIS and ISS Scores"
+output: html_document
+date: "2025-03-17"
+author: jaegerl
+---
+
+```{r setup, include=FALSE}
+# define paths
+# for data import
+import_path <- "02_data/01_raw_data/"
+# for export of inspection objects (spreadsheets)
+inspect_path <- "03_spreadsheets/"
+# for export of clean data
+clean_path <- "02_data/02_clean_data/"
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(data.table)
+library(rio)
+library(vcd)
+library(eulerr)
+```
+
+## Identify Cases without GCS
+
+Check if the cases in `Pivot table nur Eingeschlossene` are the ones without a recorded GCS.
+
+```{r nogcs}
+# function for data import from .csv files
+import_dataset <- function(...) {
+  import_list(..., rbind = TRUE, setclass = "data.table")
+}
+# load cases
+diagnoses <- suppressWarnings(import_list(paste0(import_path, "Diagnosen.xlsx"), 
+                                          setclass = "data.table", 
+                                          guess_max = 50000))
+# get the relevant sheets
+all_cases <- diagnoses[[2]]
+included_cases <- diagnoses[[3]]
+colnames(all_cases)[1] <- "research_case_id"
+colnames(included_cases)[1] <- "research_case_id"
+
+# load vitals
+load(paste0(clean_path, "vitals_clean.RData"))
+
+# get gcs values into the cases datasets
+all_cases <- merge(all_cases, y = vitals_clean[, .(research_case_id,
+                                                   gcs)],
+                   by = "research_case_id",
+                   all.x = TRUE)
+included_cases <- merge(included_cases, y = vitals_clean[, .(research_case_id,
+                                                             gcs)],
+                        by = "research_case_id",
+                        all.x = TRUE)
+# identify cases without gcs
+all_cases[, nogcs := as.integer(is.na(gcs))]
+included_cases[, nogcs := as.integer(is.na(gcs))]
+all_cases[, included := as.integer(research_case_id %in% 
+                                     included_cases$research_case_id)]
+
+# look at percentages of missing GCS cases in the two cases datasets
+round(xtabs(~ included + nogcs, data = all_cases) * 100 / nrow(all_cases),
+      digits = 1)
+# among the included patients, only a very small percentage has no recorded GCS entry.
+# it could be that these are cases where the GCS was present in the raw data, but not
+# readable. let's check
+vitals_raw <- import_dataset(paste0(import_path, 
+                                    "[SDS].[v_Export_Vital_Werte_tra_sds].csv"))
+gcs_raw <- vitals_raw[Messung_Name == "GCS", .(research_case_id)] |> 
+  unique()
+sum(!(included_cases$research_case_id %in% gcs_raw$research_case_id))
+
+# generally, how many cases do not have any vital parameters recorded?
+nrow(all_cases[!research_case_id %in% vitals_clean$research_case_id])
+```
+
+Only a few cases (`r sum(all_cases$included * all_cases$nogcs)` out of `r sum(all_cases$included)`) in the "included" data set do not have a recorded GCS value. It seems like we may apply the presence of a recorded GCS value as inclusion criterion as recommended by the client. Still, it would be relevant to know whether there are any systematic differences between those with and those without recorded GCS values. It makes sense to check what the diagnoses actually contain first.
+
+
+## Check Diagnoses
+
+```{r diagnoses1, fig.show = "hold"}
+load(paste0(clean_path, "Diagnosis_cleaned.RData"))
+setDT(Diagnosis_cleaned)
+colnames(Diagnosis_cleaned)
+Diagnosis_cleaned[, included := as.integer(research_case_id %in%
+                                             included_cases$research_case_id)]
+
+# inspect a few injuries
+injuries <- Diagnosis_cleaned[, .(injury_descriptions)] |> 
+  unique()
+injuries[order(str_length(injury_descriptions))] |> 
+  head(20)
+# for some reason, there are patients with internal, non-traumatic diagnoses.
+# let's check if this is also the case among the included patients:
+injuries_included <- Diagnosis_cleaned[research_case_id %in% 
+                                         included_cases$research_case_id,
+                                       .(injury_descriptions)] |> 
+  unique()
+injuries_included[order(str_length(injury_descriptions))] |> 
+  head(20)
+# ok, the simplest cases seem to have at least one head injury. however, it is
+# not clear to me why they would be classified as polytrauma cases?
+
+# let's do a deeper check with the raw diagnoses dataset
+diagnoses_raw <- diagnoses[[1]]
+colnames(diagnoses_raw)
+# ok, it looks like the diagnoses in the Excel sheet were defined according to
+# the assigned ICD-10 codes. let's check
+diagnoses_raw[Gehrinerschütterung == 1,
+              .(Displayname,
+                Code)] |> 
+  unique()
+# ok, this makes sense! concussion is really only identified if there is the
+# corresponding ICD-10 code.
+diagnoses_raw[Fraktur == 1,
+              .(Displayname,
+                Code)] |> 
+  unique()
+diagnoses_raw[Blutung == 1,
+              .(Displayname,
+                Code)] |> 
+  unique() |> 
+  head()
+# same for fractures and bleeding.
+
+# check the difference in distributions of concussion, bleeding, fracture
+# between the included and the non-included patients
+mosaic(bleeding ~ included, Diagnosis_cleaned)
+mosaic(fracture ~ included, Diagnosis_cleaned)
+mosaic(concussion ~ included, Diagnosis_cleaned)
+mosaic(unconsciousness ~ included, Diagnosis_cleaned)
+mosaic(brain_edema ~ included, Diagnosis_cleaned)
+```
+
+```{r diagnoses2}
+# ok, inclusion seems to be related to the presence of relevant TBI diagnoses!
+# let's check if this may have been the inclusion criterion
+included_cases2 <- Diagnosis_cleaned[bleeding + fracture + concussion + 
+                                       brain_edema + brain_compression +
+                                       unconsciousness > 0]
+# look at the missing ones
+included_fail <- setdiff(Diagnosis_cleaned[included == 1],
+                         included_cases2)
+included_fail[, .(research_case_id,
+                  injury_descriptions)]
+# these do not even have a trauma-related diagosis?!
+
+# ok, let's check the presence of gcs and our inclusion criterion
+all_cases[, included2 := as.integer(research_case_id %in% 
+                                      included_cases2$research_case_id)]
+mosaic(nogcs ~ included2, data = all_cases)
+# ok, most cases in the dataset with TBI actually has a GCS record!
+```
+
+OK, the mystery may be solved: The "included" cases seem to be those with at least one ICD-10 code corresponding to some form of traumatic brain injury! These cases are pretty much exactly the cases with a recorded GCS.
+
+Still, I am wondering why there are records of cases with diagnoses that do not correspond to polytrauma. Maybe, the AIS values can help us here. We may define polytrauma as AIS scores of at least 3 in at least two different body regions (which corresponds to part of the Berlin definition).
+
+```{r diagnoses3}
+load(paste0(clean_path, "iss_clean.RData"))
+Diagnosis_cleaned <- merge(x = Diagnosis_cleaned,
+                           y = iss_clean,
+                           by = "research_case_id",
+                           all.x = TRUE)
+# get AIS values to identify polytrauma
+ais_mapping <- import_dataset(paste0(import_path,
+                                     "[SDS].[v_Export_Mapping_Diagnosen_ICD_to_AIS_tra_sds].csv"))
+polytrauma_ais <- ais_mapping[MAX_AIS_SEVERITY >= 3
+                              ][, .(n_regions = n_distinct(AIS_CHAPTER)),
+                                by = .(research_case_id)
+                                ][n_regions >= 2]
+nrow(polytrauma_ais)
+# ok, only a fraction of these patients qualifies as having polytrauma in the
+# strict sense! maybe the majority simply has injuries in at least two AIS
+# body regions?
+
+# let's check the distribution of body regions
+ais_regions <- ais_mapping[, .(n_regions = n_distinct(AIS_CHAPTER)),
+                           by = .(research_case_id)]
+table(ais_regions$n_regions)
+# most cases only had one affected body region, these should not qualify as
+# polytrauma! let's check if a dataset including cases with at least two
+# injured regions is reasonable:
+polytrauma_ais2 <- ais_mapping[, .(n_regions = n_distinct(AIS_CHAPTER)),
+                               by = .(research_case_id)
+                               ][n_regions >= 2]
+# this look good. check how many of them are in the included data set.
+length(intersect(polytrauma_ais2$research_case_id,
+                 included_cases$research_case_id))
+# what about cases with TBI, but no polytrauma?
+length(setdiff(included_cases$research_case_id,
+               polytrauma_ais2$research_case_id))
+# oh ok, these are quite a few, too!
+```
+Okay, summarized:
+
+* Not all patients in the dataset have polytrauma: Only `r nrow(polytrauma_ais2)` out of `r nrow(all_cases)` according to a very broad definition.
+* Not all patients with polytrauma have TBI: Only `r nrow(polytrauma_ais2[research_case_id %in% included_cases2$research_case_id])` out of `r nrow(polytrauma_ais2)`.
+* Conversely, out of `r nrow(included_cases2)` patients with TBI, `r nrow(included_cases2[research_case_id %in% polytrauma_ais2$research_case_id])` had polytrauma.
+* GCS is missing in `r nrow(all_cases[nogcs == 1 & research_case_id %in% polytrauma_ais2$research_case_id])` of `r nrow(polytrauma_ais2)` polytrauma cases and in `r nrow(all_cases[nogcs == 1 & research_case_id %in% included_cases2$research_case_id])` of `r nrow(included_cases2)` TBI cases.
+* Generally, AIS is missing in `r nrow(all_cases[!(research_case_id %in% ais_mapping$research_case_id)])` of `r nrow(all_cases)` cases.
+
+```{r venn}
+# make data set with inclusion criteria for the different populations
+all_cases[, polytrauma := as.integer(research_case_id %in% 
+                                       polytrauma_ais2$research_case_id)]
+venndata <- all_cases[, .(polytrauma,
+                          included2)]
+venndata[, All := 1]
+setnames(venndata,
+         old = c("polytrauma", "included2"),
+         new = c("Polytrauma", "TBI"))
+vennfit <- euler(venndata)
+plot(vennfit, quantities = TRUE)
+
+# this definition of polytrauma may be too broad though due to the chapters
+# that include general injuries and due to the scores of zero. make a more
+# restrictive definition: AIS >= 1 in at least two AIS chapters except -1 and 0.
+polytrauma_ais3 <- ais_mapping[AIS_CHAPTER > 0 & MAX_AIS_SEVERITY > 0
+                               ][, .(n_regions = n_distinct(AIS_CHAPTER)), 
+                                 by = .(research_case_id)
+                                 ][n_regions > 1]
+all_cases[, polytrauma_restr := as.integer(research_case_id %in% 
+                                             polytrauma_ais3$research_case_id)]
+venndata2 <- all_cases[, .(polytrauma_restr,
+                           included2)]
+venndata2[, All := 1]
+setnames(venndata2,
+         old = c("polytrauma_restr", "included2"),
+         new = c("Polytrauma", "TBI"))
+vennfit2 <- euler(venndata2)
+plot(vennfit2, quantities = TRUE)
+```
+
+
+## AIS Values
+
+```{r ais}
+load(paste0(clean_path, "mapping_cleaned.RData"))
+# calculate region AIS of each patient as maximum AIS value for that region
+ais <- mapping_cleaned[, .(ais = max(MAX_AIS_SEVERITY)),
+                       by = .(research_case_id,
+                              AIS_CHAPTER)]
+# check distribution of AIS values
+xtabs(~ AIS_CHAPTER + ais, data = ais)
+# there are only very few cases with more severe injuries!
+# what about the cases with AIS scores of zero?
+zeroais <- ais[ais == 0]
+zeroais <- merge(zeroais,
+                 Diagnosis_cleaned[, .(research_case_id,
+                                       injury_descriptions)],
+                 by = "research_case_id",
+                 all.x = TRUE)
+# check the body regions with zero values
+table(zeroais$AIS_CHAPTER, useNA = "always")
+# some of these are indeed actual body regions. let's check what they could mean
+zeroais <- zeroais[AIS_CHAPTER != -1]
+# mmhm, let's check the raw data
+ais_mapping <- import_list(paste0(import_path,
+                                  "[SDS].[v_Export_Mapping_Diagnosen_ICD_to_AIS_tra_sds].csv"),
+                           rbind = TRUE,
+                           setclass = "data.table")
+zeroais <- ais_mapping[MAX_AIS_SEVERITY == 0 & AIS_CHAPTER != -1]
+head(zeroais[, .(DESCRIPTION)], 10)
+# hm, this makes no sense...
+
+# is this really a MAPPING between ICD-10 and AIS? let's check:
+icd_mapping <- unique(ais_mapping[, .(Code,
+                                      DESCRIPTION,
+                                      MAX_AIS_SEVERITY)])
+icd_mapping[, n := .N, by = .(Code)]
+nrow(icd_mapping[n > 1])
+# indeed: each ICD-10 code has exactly one AIS score!
+```
+
+It seems that the AIS scores were not assigned manually by the treating physicians, but that they were derived from ICD-10 codes assigned at hospital discharge. We need to clarify whether we want to use AIS scores belonging to the categories -1 ("No Map") and 0 ("Other Trauma") for a definition of polytrauma. Here are examples of these categories:
+
+```{r ais2}
+rbind(unique(ais_mapping[AIS_CHAPTER == 0, .(AIS_CHAPTER, DESCRIPTION)]),
+      unique(ais_mapping[AIS_CHAPTER == -1, .(AIS_CHAPTER, DESCRIPTION)])[1:15, ])
+```
+
+These are the distributions of score values in these categories.
+
+```{r ais3}
+ais_zeroone <- ais_mapping[AIS_CHAPTER <= 0]
+ais_zeroone |> 
+  ggplot(aes(x = MAX_AIS_SEVERITY)) +
+  geom_bar() +
+  facet_wrap(~ AIS_CHAPTER)
+```
+That is:
+
+* AIS chapter -1 (No Map) will most likely not contribute to the definition of polytrauma.
+* AIS chapter 0 (Other Trauma) may contribute a few cases.
