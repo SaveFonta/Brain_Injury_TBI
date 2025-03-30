@@ -1,0 +1,586 @@
+---
+title: "Cleaning and Exploration of Vitals and Laboratory Values"
+output: html_document
+date: "2025-03-21"
+author: jaegerl
+---
+
+```{r setup, include=FALSE}
+# define paths
+# for data import
+import_path <- "02_data/01_raw_data/"
+# for export of inspection objects (spreadsheets)
+inspect_path <- "03_spreadsheets/"
+# for export of clean data
+clean_path <- "02_data/02_clean_data/"
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(data.table)
+library(rio)
+```
+
+## Vitals
+
+```{r vitals}
+# function for data import from .csv files
+import_dataset <- function(...) {
+  import_list(..., rbind = TRUE, setclass = "data.table")
+}
+
+# import vitals data set
+vitals <- import_dataset(paste0(import_path, 
+                                "[SDS].[v_Export_Vital_Werte_tra_sds].csv"))
+# keep first measurement of each quantity for each case
+vitals <- vitals[, .SD[STARTDAT == min(STARTDAT)], 
+                 by = .(research_case_id, Messung_Name)]
+# remove unnecessary columns
+vitals[, `:=`(STARTDAT = NULL, STOPDAT = NULL)]
+# remove duplicates
+vitals <- unique(vitals)
+# check if units need some cleaning
+(vital_units <- vitals[, .(Messung_Name, 
+                           Messung_Unit)] |> 
+    unique())
+export(x = vital_units[order(Messung_Name)],
+       file = paste0(inspect_path, "vital_units.xlsx"),
+       overwrite = TRUE)
+```
+
+The units look nice and standardized. We have an issue though: Many values are duplicated: Some patients received multiple measurements of vital parameters at entry, all with the same timestamp. According to the client, we always only keep the last measurement, which was most likely a correction 
+
+```{r vitals2}
+# isolate the various quantities of interest
+bp <- vitals[Messung_Name == "Blutdruck", .(research_case_id, 
+                                            Messung_Name, 
+                                            Messung_Wert)]
+gcs <- vitals[Messung_Name == "GCS", .(research_case_id,
+                                       Messung_Name, 
+                                       Messung_Wert)]
+hr <- vitals[Messung_Name == "Puls", .(research_case_id, 
+                                       Messung_Name, Messung_Wert)]
+temperature <- vitals[Messung_Name == "Temperatur", .(research_case_id, 
+                                                      Messung_Name, 
+                                                      Messung_Wert)]
+
+
+## BP (blood pressure)
+# isolate systolic and diastolic BP
+bp <- unique(bp[!is.na(Messung_Wert)])
+bp[, `:=`(bpsys = str_extract(string = Messung_Wert, 
+                              pattern = "\\d+(?=\\/)") |> 
+            as.numeric(),
+          bpdia = str_extract(string = Messung_Wert, 
+                              pattern = "(?<=\\/)\\d+") |> 
+            as.numeric())]
+# calculate mean arterial pressure as weighted average
+bp[, map := (2 * bpdia + bpsys) / 3]
+bp <- unique(bp[!is.na(map)])
+# keep last measurement for each case
+bp <- bp[, .SD[nrow(.SD)],
+         by = .(research_case_id)]
+
+vital_preprocess <- function(dt) {
+  dt[, Messung_Wert := as.numeric(Messung_Wert)]
+  dt <- unique(dt[!is.na(Messung_Wert)])
+  dt[, .SD[nrow(.SD)], by = .(research_case_id)]
+}
+
+## GCS
+gcs <- vital_preprocess(gcs)
+
+
+## temperature
+temperature <- vital_preprocess(temperature)
+
+## HR (heart rate)
+hr <- vital_preprocess(hr)
+
+## make a common data set in wide format
+vitals_clean <- rbind(gcs,
+                      unique(bp[, .(Messung_Wert = map,
+                                    Messung_Name, 
+                                    research_case_id)]),
+                      hr,
+                      temperature)
+# English names for the parameters
+vitals_clean[, Messung_Name := case_when(
+  Messung_Name == "Blutdruck" ~ "bp",
+  Messung_Name == "Puls" ~ "hr",
+  Messung_Name == "GCS" ~ "gcs",
+  Messung_Name == "Temperatur" ~ "temperature")]
+# convert to wide format
+vitals_clean <- dcast(data = vitals_clean,
+                      research_case_id ~ Messung_Name, 
+                      value.var = "Messung_Wert")
+
+# save
+save(vitals_clean, 
+     file = paste0(clean_path, "vitals_clean.RData"))
+export(x = vitals_clean,
+       file = paste0(clean_path, "vitals_clean.csv"),
+       overwrite = TRUE)
+```
+
+Codebook:
+
+* __research_case_id__: character, ID of case.
+* __bp__: numeric, mean arterial blood pressure in mmHg.
+* __gcs__: numeric, Glasgow Coma Scale (integer 3-15).
+* __hr__: numeric, heart rate in beats per minute.
+* __temperature__: numeric, body temperature in degrees Celsius.
+
+
+## Laboratory Values
+
+Here, we need to isolate measurements of hemoglobin, lactate, INR (international normalized ratio), Quick, creatine kinase.
+
+
+```{r lab1}
+lab <- import_dataset(paste0(import_path,
+                             "[SDS].[v_Export_Blut_Werte_tra_sds].csv"))
+lab_entries <- lab[, .(Observation_identifier,
+                       Units,
+                       References_range)
+                   ][order(Observation_identifier,
+        Units,
+        References_range)] |> 
+  unique()
+export(x = lab_entries,
+       file = paste0(inspect_path, "lab_entries.xlsx"),
+       overwrite = TRUE)
+```
+
+Note that there are `r n_distinct(lab[, (Observation_identifier)])` different names for the laboratory values, and `r n_distinct(lab[, .(Observation_identifier, Units, References_range)])`. Here, we exported them into an Excel spreadsheet to check which ones are of interest.
+
+Upon inspection of the entries in the laboratory data set, it appears that these are the entries of interest:
+
+```{r lab2}
+lab_relevant <- lab[Observation_identifier %in% c("Hämoglobin", "ctHb", "Hb im Vollblut",
+                                                  "Laktat", "cLac",
+                                                  "INR #", "INR (manuell) #", 
+                                                  "INR aus Kapillarblut #",
+                                                  "Quick (automat) #", "Quick (manuell) #", 
+                                                  "Quick aus Kapillarblut",
+                                                  "CK, total")]
+lab_relevant[, .(n_obs = .N,
+                 n_na = sum(is.na(Observation_value_num)),
+                 p10 = quantile(Observation_value_num, probs = .1, na.rm = TRUE),
+                 p50 = median(Observation_value_num, na.rm = TRUE),
+                 p90 = quantile(Observation_value_num, probs = .9, na.rm = TRUE)),
+             by = .(Observation_identifier,
+                    Units)
+             ][order(Observation_identifier,
+        Units)]
+```
+
+Issues that appear immediately:
+
+* It looks like the entries *Hb im Vollblut*, *ctHb*, *cLac* (presumably BGA values, see below), *Quick aus Kapillarblut*, *INR aus Kapillarblut #* are negligible.
+* *Quick (manuell) #* is weird, let's ckeck.
+```{r lab3}
+quickmanuell <- lab_relevant[Observation_identifier == "Quick (manuell) #"]
+summary(quickmanuell$Observation_value_num)
+```
+
+These are impossibly low values (reference range is reported as 70-120%). Also, many entries have a $<$ sign in front, indicating possible non-detects. We may have to ask the client about these. For now, I will just delete these values, as they make up less than 0.5% of the other Quick values.
+
+* Hemoglobin in the unit g/dl looks like it is just hemoglobin in the regular unit g/l. With only three entries, we may neglect this unit discrepancy.
+
+```{r lab4}
+lab_relevant <- lab_relevant[Observation_identifier %in% c("Hämoglobin",
+                                                           "Laktat",
+                                                           "INR #", "INR (manuell) #",
+                                                           "Quick (automat) #",
+                                                           "Quick aus Kapillarblut",
+                                                           "CK, total")]
+# set English test names
+lab_relevant[, test_name := case_when(
+  Observation_identifier == "Hämoglobin" ~ "hemoglobin",
+  Observation_identifier == "Laktat" ~ "lactate",
+  Observation_identifier %in% c("INR #", "INR (manuell) #") ~ "inr",
+  Observation_identifier %in% c("Quick (automat) #", "Quick aus Kapillarblut") ~ "quick",
+  Observation_identifier == "CK, total" ~ "ck")]
+
+# keep first measurement for each case
+lab_relevant <- lab_relevant[, .SD[RequestDtTm == min(RequestDtTm)],
+                             by = .(research_case_id,
+                                    test_name)]
+
+table(lab_relevant$test_name, useNA = "always")
+```
+
+Check the distributions of the single test types with these labels
+
+```{r lab5}
+lab_relevant[, .(n_obs = .N,
+                 n_na = sum(is.na(Observation_value_num)),
+                 p10 = quantile(Observation_value_num, probs = .1, na.rm = TRUE),
+                 p50 = median(Observation_value_num, na.rm = TRUE),
+                 p90 = quantile(Observation_value_num, probs = .9, na.rm = TRUE)),
+             by = .(test_name)
+             ][order(test_name)]
+```
+We'll check the distributions and the missing values test by test.
+
+
+### Missing Values
+
+I noticed an interesting property of the laboratory values: Entries outside the measurement range of the device receive a > or < in front which is simply removed from *Observation_value* to *Observation_value_num*. Let's check their magnitude:
+
+```{r labflags}
+lab_relevant[, `:=`(highvalue = as.numeric(grepl(pattern = "^>", x = Observation_value)),
+                    lowvalue = as.numeric(grepl(pattern = "^<", x = Observation_value)))]
+# check number of entries
+table(lab_relevant$highvalue, useNA = "always")
+table(lab_relevant$lowvalue, useNA = "always")
+# how many entries contain non-numeric characters but are still converted to numeric?
+sum(grepl(pattern = "[^0-9\\.]", 
+          x = lab_relevant[!is.na(Observation_value_num), (Observation_value)]))
+```
+The entries containing non-numerical strings are exactly the ones with > and < signs. Given that these are only `r sum(lab_relevant$highvalue | lab_relevant$lowvalue)` entries out of `r nrow(lab_relevant)`, we may ignore them in a first analysis.
+
+```{r missinglab}
+## hemoglobin
+hemoglobin <- lab_relevant[test_name == "hemoglobin"]
+nahemoglobin <- hemoglobin[is.na(Observation_value_num)]
+# these are pre-analytic fails. can be neglected (i.e., regarded as missings)
+
+## ck
+ck <- lab_relevant[test_name == "ck"]
+nack <- ck[is.na(Observation_value_num)]
+# also pre-analytic fails. can be neglected (i.e., regarded as missings)
+
+## lactate
+lactate <- lab_relevant[test_name == "lactate"]
+nalactate <- lactate[is.na(Observation_value_num)]
+# same thing
+
+## quick
+quick <- lab_relevant[test_name == "quick"]
+naquick <- quick[is.na(Observation_value_num)]
+# same thing
+
+## inr
+inr <- lab_relevant[test_name == "inr"]
+nainr <- inr[is.na(Observation_value_num)]
+# same thing
+```
+
+OK, so upon inspection it becomes evident that the missing values indeed correspond to failed measurements.
+
+
+### Distributions
+
+Let's check the distributions of the tests graphically.
+
+```{r labdistros}
+## hemoglobin
+# stratify by sex due to the different reference ranges
+patients <- import_dataset(paste0(import_path, 
+                                  "[SDS].[v_Export_Patient_Unfall_SpitalAufenthalt_tra_sds].csv"))
+hemoglobin |> 
+  merge(y = patients[, .(research_case_id, 
+                         Geschlecht)] |> 
+          unique(),
+        by = "research_case_id",
+        all.x = TRUE) |> 
+  ggplot(aes(x = Observation_value_num, col = Geschlecht)) +
+  geom_density() +
+  labs(x = "Hemoglobin, g/l", y = "Density", title = "Hemoglobin") +
+  theme_minimal()
+# percentage of values below 70 g/l (warranting blood transfusion)
+(100 * sum(hemoglobin$Observation_value_num < 70, na.rm = TRUE) / 
+    sum(!is.na(hemoglobin$Observation_value_num))) |> 
+  round(digits = 1)
+
+## ck
+ck |> 
+  ggplot(aes(x = Observation_value_num)) +
+  geom_density() +
+  scale_x_continuous(limits = c(0, 2000)) +
+  labs(x = "Creatine Kinase, U/l", y = "Density", title = "Creatine Kinase") +
+  theme_minimal()
+# percentage of values above 2000 U/l (very highly elevated)
+(100 * sum(ck$Observation_value_num > 2000, na.rm = TRUE) /
+    sum(!is.na(ck$Observation_value_num))) |> 
+  round(digits = 1)
+
+## lactate
+lactate |> 
+  ggplot(aes(x = Observation_value_num)) +
+  geom_density() +
+  scale_x_continuous(limits = c(0, 10)) +
+  labs(x = "Lactate, mmol/l", y = "Density", title = "Lactate") +
+  theme_minimal()
+# percentage of values above 10 mmol/l (very highly elevated)
+(100 * sum(lactate$Observation_value_num > 10, na.rm = TRUE) /
+    sum(!is.na(lactate$Observation_value_num))) |> 
+  round(digits = 1)
+
+## quick
+quick |> 
+  ggplot(aes(x = Observation_value_num)) +
+  geom_density() +
+  labs(x = "Quick, %", y = "Density", title = "Quick") +
+  theme_minimal()
+# this looks reasonable
+
+## inr
+inr |> 
+  ggplot(aes(x = Observation_value_num)) +
+  geom_bar() +
+  labs(x = "INR", y = "Count", title = "INR") +
+  scale_x_continuous(limits = c(0, 5)) +
+  theme_minimal()
+# percentage of values above 5 (non-physiological)
+(100 * sum(inr$Observation_value_num > 5, na.rm = TRUE) /
+    sum(!is.na(inr$Observation_value_num))) |> 
+  round(digits = 1)
+```
+
+Remarks:
+
+* Hemoglobin values seem to follow a mixture distribution with a primary bulk at the reference range and a secondary bulk at considerably lower values that gives rise to a heavy left tail. The lab values are presumably from the trauma ward and blood loss is of course common, and the bulk of values in the left tail may be attributable to patients with severe blood loss.
+* Lactate and CK have a few positive outliers.
+* Outliers in Quick, INR seem neglibible.
+
+To assess the pathophysiology using these laboratory values, it may make sense to define reasonable ranges/categories.
+
+
+### BGA values 
+
+Lactate may be contained in the BGA (blood gas analysis) data set.
+
+```{r bga}
+bga <- import_dataset(paste0(import_path, "[SDS].[v_Export_Bga_Werte_tra_sds].csv"))
+# keep first value per case
+bga <- bga[, .SD[Messung_dttm == min(Messung_dttm)],
+           by = .(research_case_id, 
+                  Name)]
+unique(bga$Name) |> sort()
+# it looks like Lac are lactate values
+lactate_bga <- bga[Name == "Lac"]
+# check non-numerical entries
+lactate_bga_nonnum <- lactate_bga[grepl(pattern = "[^0-9\\.]", 
+                                        x = Wert)]
+# all must be some kind of measurement failure. simply convert to numeric
+lactate_bga[, value := as.numeric(Wert)]
+# check percentage of missing numerical values
+100 * sum(is.na(lactate_bga$value)) / nrow(lactate_bga)
+
+# visualize the distribution of values
+lactate_bga |> 
+  ggplot(aes(x = as.numeric(value))) +
+  geom_density() +
+  scale_x_continuous(limits = c(0, 10)) +
+  labs(x = "Lactate, mmol/l", y = "Density", title = "Lactate from BGA") +
+  theme_minimal()
+# percentage of values above 10 mmol/l (very highly elevated)
+(100 * sum(lactate_bga$value > 10, na.rm = TRUE) /
+    sum(!is.na(lactate_bga$value))) |> 
+  round(digits = 1)
+
+# this looks fine. merge with the other lactate data set.
+lactate_all <- rbind(lactate[, .(research_case_id,
+                                 ObservationDtTm,
+                                 test_name,
+                                 Observation_value_num,
+                                 Units,
+                                 References_range,
+                                 highvalue,
+                                 lowvalue,
+                                 source_value = "laboratory")],
+                     lactate_bga[, .(research_case_id,
+                                     ObservationDtTm = Messung_dttm,
+                                     test_name = "lactate",
+                                     Observation_value_num = value,
+                                     Units = Unit,
+                                     References_range = NA,
+                                     highvalue = 0,
+                                     lowvalue = 0,
+                                     source_value = "bga")])
+# keep first observation per patient
+lactate_all <- lactate_all[, .SD[ObservationDtTm == min(ObservationDtTm)],
+                           by = .(research_case_id)]
+# in case of duplicates, keep the last record
+lactate_all <- lactate_all[, .SD[nrow(.SD)],
+                           by = .(research_case_id)]
+```
+
+
+### Cleaning
+
+Make a data set with one observation per case Following the approach also used for the vitals, we may keep the last recorded value for each case.
+
+```{r labclean}
+lab_preprocess <- function(dt) {
+  dt <- dt[!is.na(Observation_value_num)]
+  dt[, .SD[nrow(.SD)], by = .(research_case_id)]
+}
+
+hemoglobin <- lab_preprocess(hemoglobin)
+quick <- lab_preprocess(quick)
+inr <- lab_preprocess(inr)
+ck <- lab_preprocess(ck)
+
+# put all tests together in a long table
+lab_clean <- rbind(hemoglobin, ck, quick, inr)[, .(research_case_id,
+                                                   test_name,
+                                                   Observation_value_num,
+                                                   Units,
+                                                   References_range,
+                                                   highvalue,
+                                                   lowvalue)]
+lab_clean[, source_value := "laboratory"]
+lab_clean <- rbind(lab_clean,
+                   lactate_all[, .(research_case_id,
+                                   test_name,
+                                   Observation_value_num,
+                                   Units,
+                                   References_range,
+                                   highvalue,
+                                   lowvalue,
+                                   source_value)])
+setnames(lab_clean,
+         old = c("Observation_value_num", "Units", "References_range"),
+         new = c("value", "unit", "ref_range"))
+
+# also make a wide table where information about ref. ranges, >< flags, and
+# source of lactate is lost
+lab_clean_wide <- dcast(lab_clean, 
+                        research_case_id ~ test_name, 
+                        value.var = "value")
+
+# save
+save(lab_clean, lab_clean_wide,
+     file = paste0(clean_path, "lab_clean.RData"))
+export(x = lab_clean,
+       file = paste0(clean_path, "lab_clean.csv"),
+       overwrite = TRUE)
+export(x = lab_clean_wide,
+       file = paste0(clean_path, "lab_clean_wide.csv"),
+       overwrite = TRUE)
+```
+
+Codebook:
+
+* __research_case_id__: character, ID of case.
+* __test_name__: character, name of laboratory test.
+* __value__: numeric, value of laboratory test.
+* __unit__: character, measurement unit of laboratory test.
+* __ref_range__: character, reference range of laboratry test (if available)
+* __highvalue__: numeric, 0-1 indicator for a value with ">" in front.
+* __lowvalue__: numeric, 0-1 indicator for a value with "<" in front.
+
+
+## Patient Demographics
+
+```{r patients}
+patients <- import_dataset(paste0(import_path, 
+                                  "[SDS].[v_Export_Patient_Unfall_SpitalAufenthalt_tra_sds].csv"))
+nrow(patients) - n_distinct(patients$research_case_id)
+# each row corresponds to one single research_case_id, there are no duplicates.
+
+# the first column contains ASA scores, of which the client sad that we may
+# use them as proxy for comorbidity. however, they seem to be recorded only in
+# a minority of cases.
+table(patients$Asa_vor_unfall, useNA = "always")
+# I'd say we don't use these (comorbidity at baseline wasn't too interesting
+# anyway).
+
+# there seems to be information on mortality. is there always a duration until
+# death if there is a death date-time, and vice versa?
+test <- patients[!is.na(Tod_Eingetroffen_Datumzeit)]
+sum(is.na(test$Tod_Nach_Stunden))
+test <- patients[!is.na(Tod_Nach_Stunden)]
+sum(is.na(test$Tod_Eingetroffen_Datumzeit))
+# these variables are consistent
+
+
+# make a data set with relevant variables
+patients_clean <- patients[, .(research_case_id,
+                               Patient_alter,
+                               Geschlecht,
+                               Dauer_Krankenhaus_Aufenthalt_Tagen,
+                               Dauer_IPS_Tagen,
+                               Dauer_Beatmung_Stunden,
+                               Tod_Nach_Tagen)]
+setnames(patients_clean,
+         old = c("Patient_alter", "Geschlecht",
+                 "Dauer_Krankenhaus_Aufenthalt_Tagen",
+                 "Dauer_IPS_Tagen",
+                 "Dauer_Beatmung_Stunden",
+                 "Tod_Nach_Tagen"),
+         new = c("age", "sex",
+                 "stay_days",
+                 "icu_days", "ventilation_hours",
+                 "death_days"))
+# binary indicators for death, icu, mechanical ventilation
+patients_clean[, `:=`(death = as.numeric(!is.na(death_days)),
+                      icu = as.numeric(!is.na(icu_days)),
+                      ventilation = as.numeric(ventilation_hours > 0))]
+# make ventilation hours consistent with the other duration variables
+patients_clean[, ventilation_hours := ifelse(ventilation_hours == 0,
+                                             yes = NA, no = ventilation_hours)]
+
+# just to be sure: are there any patients with ventilation but no documented
+# ICU stay?
+weird <- patients_clean[ventilation & !icu]
+# ok, this is strange. maybe they did receive some sort of non-invasive 
+# ventilation on the trauma ward, not in the ICU?
+
+# age still has the ugly 79+ entries. let's inspect
+patients_clean[, elderly := as.numeric(age == "79+")]
+ggplot(patients_clean,
+       aes(x = age |> 
+             str_extract(pattern = "\\d+") |> 
+             as.numeric())) +
+  geom_bar() +
+  labs(main = "Age Distribution", x = "Age, years", y = "Frequency") +
+  theme_minimal()
+
+# elderly patients seem to be particularly overrepresented.
+```
+
+Due to anonymization, all ages from age 79 years are encoded as "79+". I've therefore introduced a binary indicator for this age category and converted the character ages to numeric.
+
+```{r patients2}
+patients_clean[, age := age |> 
+                 str_extract(pattern = "\\d+") |> 
+                 as.numeric()]
+# use English abbreviations for sex
+patients_clean[sex == "M", sex := "m"]
+patients_clean[sex == "W", sex := "f"]
+
+# reorder variables
+patients_clean <- patients_clean[, .(research_case_id,
+                                     age,
+                                     elderly,
+                                     sex, 
+                                     stay_days,
+                                     icu, icu_days,
+                                     ventilation, ventilation_hours,
+                                     death, death_days)]
+
+# save
+save(patients_clean,
+     file = paste0(clean_path, "patients_clean.RData"))
+export(x = patients_clean,
+       file = paste0(clean_path, "patients_clean.csv"))
+```
+
+Codebook:
+
+* __research_case_id__: character, ID of case.
+* __age__: numeric, age in years. *careful*: All ages from age 79 years are encoded as 79 years.
+* __elderly__: numeric, 0-1 indicator for age 79+.
+* __sex__: character, either of `"m"` (male) or `"f"` (female).
+* __stay_days__: integer, length of hospital stay in days.
+* __icu__: numeric, 0-1 indicator for ICU stay (intensive care unit).
+* __icu_days__: numeric, if applicable (`icu == 1`), duration of ICU stay in days.
+* __ventilation__: numeric, 0-1 indicator for mechanical ventilation.
+* __ventilation_hours__: numeric, if applicable (`ventilation == 1`), duration of mechanical ventilation in hours.
+* __death__: numeric, 0-1 indicator for death.
+* __death_days__: numeric, if applicable (`death == 1`), length of hospital stay in days until death.
