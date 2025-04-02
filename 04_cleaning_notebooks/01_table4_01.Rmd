@@ -1,0 +1,296 @@
+---
+title: "Analysis of Missing GCS and Table 4: Intervention & GCS"
+output: html_document
+date: "2025-03-17"
+author: vjohner
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(data.table)
+library(ggplot2)
+```
+
+## Analysis of Mismatch and Missing GCS
+
+The client wishes, among others, a dataset containing a count of each intervention grouped by gcs scores. As already discussed, a lot of GCS scores are missing, but potentially still informative.
+
+```{r mismatch_1}
+# import interventions data set
+load("02_data/02_clean_data/interventions1_wide.RData")
+interventions <- interventions1_wide
+# import vitals data set for GCS scores
+load("02_data/02_clean_data/vitals_clean.RData")
+
+# remove unnecessary cols, rename, TAKE OUT ROWS WITH NO GCS (CAN'T BE FINAL SOLUTION!)
+vitals <- vitals_clean %>% select(research_case_id, gcs)
+
+# Remove datasets with long name
+rm(interventions1_wide, vitals_clean)
+
+
+```
+
+Check for mismatch
+
+```{r mismatch_2}
+
+# Check number of patients in each dataset
+num_interventions <- n_distinct(interventions$research_case_id)
+num_vitals <- n_distinct(vitals$research_case_id)
+
+# Find mismatches (anti_join() returns all rows from x without a match in y)
+missing_in_interventions <- anti_join(vitals, interventions, by = "research_case_id")
+missing_in_vitals <- anti_join(interventions, vitals, by = "research_case_id")
+
+# Summary table
+missing_summary <- tibble(
+  Dataset = c("Interventions", "Vitals"),
+  Unique_Patients = c(num_interventions, num_vitals),
+  Missing_Cases = c(nrow(missing_in_vitals), nrow(missing_in_interventions))
+)
+
+print(missing_summary)
+
+# Find how many cases no treatment at all
+no_trt <- interventions %>%
+  filter(if_all(all_of(names(interventions)[2:12]), ~ . == 0)) %>%
+  nrow()
+
+print(cat("Number of cases with no procedure at all:", no_trt))
+
+```
+Interpretation is as follows: 262 cases in `interventions` are not in `vitals`, and 1402 cases from `vitals`do not exist in `interventions`. Although the majority of cases (17089) in `interventions` received no treatment at all, we treat the missing cases from `vitals` as having received no treatment/intervention (client's decision). The cases from `interventions` missing in `vitals` I decided to treat similar to cases with missing GCS values. To be able to differentiate the reason of missing I classified them as -1 though (clearly invalid but numeric, easy to change to NA with code commented out).
+
+```{r mismatch_3}
+# Ensure both datasets are tibbles
+interventions <- as_tibble(interventions)
+vitals <- as_tibble(vitals)
+
+# Define procedure columns (adjust range if necessary)
+procedure_cols <- names(interventions)[2:12]  
+
+# Check which cases are missing in which dataset
+missing_in_vitals <- setdiff(interventions$research_case_id, vitals$research_case_id)
+missing_in_interventions <- setdiff(vitals$research_case_id, interventions$research_case_id)
+
+# Full join to include all research_case_id values
+full_data <- full_join(interventions, vitals, by = "research_case_id")
+
+# Set intervention columns to 0 where they are NA (patients from vitals but not interventions)
+full_data <- full_data %>%
+  mutate(across(all_of(procedure_cols), ~ replace_na(., 0)))
+
+# Differentiate missing GCS cases:
+# - If GCS was missing in the original vitals dataset --> Keep it as NA
+# - If the patient was missing from vitals entirely --> Set GCS to -1
+full_data <- full_data %>%
+  mutate(gcs = case_when(
+    research_case_id %in% missing_in_vitals ~ -1,
+    TRUE ~ gcs
+  ))
+
+# OPTIONAL: Convert -1 to NA if wanted
+# full_data <- full_data %>% mutate(gcs = if_else(gcs == -1, NA_real_, gcs))
+
+```
+
+Now we have dealt with the mismatch problem. To get a better understanding as to why cases might exist in `interventions` and not in `vitals`, we can look at them together with the diagnoses.
+
+```{r mismatch_4}
+#
+load("02_data/02_clean_data/Diagnosis_cleaned.RData")
+
+check <-  full_join(Diagnosis_cleaned, vitals, by = "research_case_id") %>% filter(research_case_id %in% missing_in_vitals)
+
+head(check)
+```
+No obvious pattern or indications as to why they are missing in `vitals`, i.e. have missing GCS scores. (MAYBE LEVY YOU SEE SOMETHING?) As stated above, I suggested we treat them as missing until we figure out how to handle all the other missing GCS.
+
+Thus: How to tackle are the missing values in the GCS score? We can check with the `Diagnosis_cleaned` dataset if we can find a reason as to why the GCS values might be missing. The client did not know.
+
+```{r na_gcs_1}
+check2 <- left_join(vitals, Diagnosis_cleaned, by = "research_case_id") %>% filter(is.na(gcs))
+head(check2)
+```
+
+It looks like a lot of them have no diagnosis and might not even be (poly)trauma patients?
+
+```{r table4_6}
+# Find how many cases have no diagnosis
+no_diagnosis <- check2 %>%
+  filter(if_all(all_of(names(check2)[4:19]), ~ . == 0))
+
+share_nodia <- nrow(no_diagnosis) / sum(is.na(check2$gcs)) * 100
+share_diana <- sum(is.na(check2$date)) / sum(is.na(check2$gcs)) * 100
+share_unexp <- 100 - share_nodia - share_diana
+
+cat(share_nodia, "% of cases with missing GCS values show no diagnosis. ")
+
+cat(share_diana, "% of cases with missing GCS values are not available in the Diagnosis dataset. ")
+
+cat("Thus, only", share_unexp, "% of cases are missing without potential explanation. Maybe noise?")
+
+```
+
+We can have a quick look at these 2.66% of cases.
+
+```{r na_gcs_2}
+unexp_nagcs <- check2 %>%
+  filter(is.na(gcs) & !(research_case_id %in% no_diagnosis$research_case_id) & !is.na(date))
+head(unexp_nagcs)
+
+```
+Looks like noise, i.e. cases where the gcs value is truly missing. (LEVY DO YOU SEE A PATTERN?)
+
+Quick Plot:
+
+```{r na_gcs_3}
+missing_gcs_data <- data.frame(
+  Category = c("No Diagnosis", "Missing in Diagnosis", "Unexplained"),
+  Count = c(nrow(no_diagnosis), sum(is.na(check2$date)), length(unexp_nagcs$research_case_id))
+)
+missing_gcs_data$Share <- round((missing_gcs_data$Count / sum(missing_gcs_data$Count)) * 100, 2)
+
+ggplot(missing_gcs_data, aes(x = "", y = Count, fill = Category)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  geom_text(aes(label = paste0(Count, " (", Share, "%)")), position = "jitter") +
+  labs(title = "Sources of Missing GCS Values")
+
+```
+*CAVEAT:* There are no cases in the whole dataset that have 0 in the column number of injuries. Thus, "No Diagnosis" does not (necessarily) mean that the person was not a trauma patient, but merely indicates that among the *selected* diagnoses none was made. I am not sure how the diagnoses in the dataset (as columns) relate to others not included, i.e., also with regards to the number of injuries. (LEVY, DO YOU KNOW HOW THESE DIAGNOSES ARE "SPECIAL" OR RELEVANT?)
+
+## Table 4
+
+Finally, let's create the table wished by the client.
+
+ADDED LATER: We add AIS Head scores as well.
+
+```{r table4_1}
+ais_head <- read_csv("02_data/02_clean_data/mapping_cleaned.csv") %>% filter(AIS_CHAPTER == 1) %>% select(research_case_id, MAX_AIS_SEVERITY) %>% rename("ais_score" = MAX_AIS_SEVERITY)
+
+# Check if we have a mismatch (all good)
+table(is.na(left_join(ais_head, full_data, by = "research_case_id")[1]))
+
+# A lot of missing values!
+full_data2 <- left_join(full_data, ais_head, by = "research_case_id")
+table(is.na(full_data2$ais_score))
+
+# Most of them also missing in gcs!
+full_data2[!is.na(full_data2$gcs),]
+table(is.na(full_data2[!is.na(full_data2$gcs),]$ais_score))
+
+```
+
+
+
+```{r table4_2}
+# We will investigate, for now, I create the code to a dataset with cases where GCS exists.
+# Summarize intervention counts grouped by GCS
+table4 <- full_data %>%
+  pivot_longer(cols = all_of(procedure_cols), names_to = "Intervention", values_to = "Performed") %>%
+  group_by(gcs, Intervention) %>%
+  summarise(Count = sum(Performed), .groups = "drop") %>%
+  pivot_wider(names_from = "Intervention", values_from = "Count", values_fill = 0)
+
+# Print table
+print(table4)
+
+# Version with AIS
+table4_2 <- full_data2 %>%
+  select(-gcs) %>%
+  pivot_longer(cols = all_of(procedure_cols), names_to = "Intervention", values_to = "Performed") %>%
+  group_by(ais_score, Intervention) %>%
+  summarise(Count = sum(Performed), .groups = "drop") %>%
+  pivot_wider(names_from = "Intervention", values_from = "Count", values_fill = 0)
+
+# Export to rds file (like Prof. Mächler told us to)
+saveRDS(table4, file = "02_data/02_clean_data/Table4.RDS")
+
+```
+
+We see some procedures performed in cases where we have a missing GCS value. Might be for the noise cases, however, a quick manual check indicated that there were interventions also in cases where all columns in diagnoses were 0! This is a problem (see above, still cases with trauma but 0s in diagnoses).
+
+Quick plot:
+```{r table4_3}
+gcs_intervention_counts <- full_data %>%
+  pivot_longer(cols = all_of(procedure_cols), names_to = "Intervention", values_to = "Performed") %>%
+  group_by(gcs) %>%
+  summarise(Total_Interventions = sum(Performed), .groups = "drop")
+
+# Bar plot
+ggplot(gcs_intervention_counts, aes(x = as.factor(gcs), y = Total_Interventions)) +
+  geom_col(fill = "aquamarine3", alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "Total Number of Interventions by GCS Score", x = "GCS Score", y = "Total Interventions") +
+  geom_text(aes(label = Total_Interventions), vjust = -0.5)
+
+# For AIS as well
+gcs_intervention_counts2 <- full_data2 %>%
+  pivot_longer(cols = all_of(procedure_cols), names_to = "Intervention", values_to = "Performed") %>%
+  group_by(ais_score) %>%
+  summarise(Total_Interventions = sum(Performed), .groups = "drop")
+
+# Bar plot
+ggplot(gcs_intervention_counts2, aes(x = as.factor(ais_score), y = Total_Interventions)) +
+  geom_col(fill = "aquamarine3", alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "Total Number of Interventions by AIS Head Score", x = "AIS Head Score", y = "Total Interventions") +
+  geom_text(aes(label = Total_Interventions), vjust = -0.5)
+
+
+```
+
+```{r plots for presentation}
+ggplot(full_data, aes(x = gcs)) +
+  geom_histogram(binwidth = 1, fill = "coral3", color = "black", alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "Distribution of GCS Scores", x = "GCS Score", y = "Patient Count") +
+  scale_x_continuous(breaks = seq(3, 15, by = 1))  # GCS ranges from 3 to 15
+
+# Categorizing GCS into TBI severity groups
+full_data <- full_data %>%
+  mutate(TBI_Severity = case_when(
+    gcs >= 13 & gcs <= 15 ~ "Mild TBI",
+    gcs >= 9 & gcs <= 12 ~ "Moderate TBI",
+    gcs >= 3 & gcs <= 8 ~ "Severe TBI",
+    TRUE ~ "Unknown"
+  ))
+
+# Plot GCS distribution with TBI severity
+plot_data <- full_data %>% filter(gcs != is.na(gcs) & gcs != -1)
+
+ggplot(plot_data, aes(x = as.factor(gcs), fill = TBI_Severity)) +
+  geom_bar() +
+  scale_fill_manual(values = c("Mild TBI" = "lightblue", "Moderate TBI" = "orange", "Severe TBI" = "red", "Unknown" = "gray")) +
+  theme_minimal() +
+  labs(title = "GCS Score Distribution with TBI Classification", x = "GCS Score", y = "Count") +
+  geom_text(stat='count', aes(label=..count..), vjust=-0.5)
+
+
+# Summarizing interventions by TBI category
+tbi_intervention_counts <- full_data %>%
+  pivot_longer(cols = all_of(procedure_cols), names_to = "Intervention", values_to = "Performed") %>%
+  group_by(TBI_Severity) %>%
+  summarise(Total_Interventions = sum(Performed), .groups = "drop")
+
+# Bar plot for interventions by TBI severity
+ggplot(tbi_intervention_counts, aes(x = TBI_Severity, y = Total_Interventions, fill = TBI_Severity)) +
+  geom_col(alpha = 0.8) +
+  scale_fill_manual(values = c("Mild TBI" = "lightblue", "Moderate TBI" = "orange", "Severe TBI" = "red")) +
+  theme_minimal() +
+  labs(title = "Total Number of Interventions by TBI Severity", x = "TBI Severity", y = "Total Interventions") +
+  geom_text(aes(label = Total_Interventions), vjust = -0.5)
+
+
+```
+
+
+### ** fill in here **
+- **Blabla**  
+
