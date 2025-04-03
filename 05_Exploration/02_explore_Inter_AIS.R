@@ -85,16 +85,16 @@ interventions <- c("Korrektur Intrakranielles Monitoring",
 
 
 # Create dummy in a new dataset
-inter <- interventions1_wide %>% 
-  mutate(intervention_severe = if_any(all_of(severe_interventions), ~ . == 1)) %>%
-  mutate(intervention_severe = as.integer(intervention_severe)) %>%
-  select(research_case_id, intervention_severe)
-
-# CREATE DIFFERENT DUMMY AND RUN AGAIN! E.g ALL vs NONE
-# inter <- interventions1_wide %>%
-#   mutate(intervention_severe = if_any(all_of(interventions), ~ . == 1)) %>%
+# inter <- interventions1_wide %>% 
+#   mutate(intervention_severe = if_any(all_of(severe_interventions), ~ . == 1)) %>%
 #   mutate(intervention_severe = as.integer(intervention_severe)) %>%
 #   select(research_case_id, intervention_severe)
+
+# CREATE DIFFERENT DUMMY AND RUN AGAIN! E.g ALL vs NONE
+inter <- interventions1_wide %>%
+  mutate(intervention_severe = if_any(all_of(interventions), ~ . == 1)) %>%
+  mutate(intervention_severe = as.integer(intervention_severe)) %>%
+  select(research_case_id, intervention_severe)
 
 # =============================================
 # Merge and CHI^2 Test
@@ -117,6 +117,22 @@ chisq.test(table(dfdummy$max_AIS_head, dfdummy$intervention_severe))
 
 # Highly associated!
 
+"blue"
+# how many different interventions did the single cases receive?
+barplot(height = table(rowSums(interventions1_wide[interventions1_wide$research_case_id %in% dfdummy$research_case_id, ][, -1])),
+        main = "Distribution of interventions", xlab = "Number of interventions", ylab = "Number of cases")
+
+# MOST CASES HAVE NO INTERVENTION!
+
+ggplot(left_join(interventions1_wide %>%
+                   filter(research_case_id %in% dfdummy$research_case_id) %>%
+                   mutate(num_interventions = rowSums(.[, -1])), dfdummy, by = "research_case_id"), 
+       aes(x = factor(num_interventions), fill = factor(max_AIS_head))) +
+  geom_bar() +
+  labs(title = "Distribution of Interventions", x = "Number of Interventions", y = "Number of Cases", fill = "Max AIS Head Score") +
+  theme_minimal()
+
+
 # =============================================
 # Import Controls
 # =============================================
@@ -137,6 +153,7 @@ dfdummy$death <- as.factor(dfdummy$death)
 str(dfdummy)
 
 
+"blue"
 # =============================================
 # Logistic Regression with Dummy
 # =============================================
@@ -160,13 +177,18 @@ plot_model(binary_model, show.values = TRUE, value.offset = .3)
 # Surprising: AIS 1 cases have lower odds of intervention than AIS 0 (p = 0.025).  
 # Due to very severe AIS 3 cases "pushing down" AIS 1 in relative terms?
 # I CAN'T MAKE SENSE OF IT
+
+"blue"
 ## ADD-ON LATER: W/ DUMMY 1/0 IF ANY INTERVENTION NO SUCH PROBLEM
+# Here, everything like expected
+
 # Age slightly lowers intervention chance (p = 0.018), but small effect.
 # (Maybe conservative with elerdly patients?)
 # Death strongly associated with intervention (p < 0.001), as expected.  
 # No effect of sex (p = 0.878).  
 
 
+# NOT NECESSARY IF DIFFERENT DUMMY
 # See what happens when we run the model without AIS_head = 3
 df_no_AIS3 <- dfdummy %>% filter(max_AIS_head != 3)
 fm_no_AIS3 <- glm(intervention_severe ~ max_AIS_head + age + sex + death, 
@@ -180,7 +202,7 @@ dfdummy %>% group_by(max_AIS_head) %>%
             n = n())
 # Also nothing that could explain it!
 
-
+"blue"
 # =============================================
 # Logistic Regression with Dummy & Interactions
 # =============================================
@@ -216,12 +238,14 @@ plot_model(dummy_inter, vline.color = "red")
 # ADD-ON LATER: IF CLASSIFICATION IF ANY INTERVENTION NO NEGATIVE EFFECTS
 # --> DIFFERENT BEHAVIOUR OF INTERACTIONS
 
-# NOTE
-"red"
-# SUMMARIZE BEFORE TALK!!! 
+
+"blue"
+# INTERAGE: FIT BETTER SLIGHTLY, 2 INTERACTIONS INSIGNIFICANT, OLDER ... TRUE
+# INTERDEATH: FIT WORSE THAN 1, INTER DEATH AIS3 NEG --> SEVERE PATIENTS WHO DIE LESS LIKELY TO RECEIVE INTERVENTION
+# INTERALL: BEST FIT, SAME THING FOR INTER DEATH, NO INTERACTION SIGNIFICANT FOR AGE
 
 
-
+"blue"
 # =============================================
 # glmer for each intervention
 # =============================================
@@ -273,14 +297,14 @@ dfindiv <- left_join(dfindiv, patients, by = "research_case_id") %>%
 
 str(dfindiv)
 
-
+"blue" # MAYBE TELL WHAT I DID ELSE
 # NOTE: mvProbit() function runs too long; in documentation stated that this might be the case.
 # Also, a lot of warnings are given that the correlation matrix is not pd. We might have very 
 # rare interventions, (almost) perfect collinearity or sth like that. We'll check later.
 
 # brms ran too long as well. Also, I can't estimate correlations btw outcomes with bernoulli (only in
 # multivariate gaussian or student models)
-
+# BAYESIAN REGRESSION MODELS
 
 # MY THOUGHTS: RUNNING INDIVIDUAL glm() MODELS MIGHT NOT MAKE SENSE SINCE IT DOES NOT ACCOUNT FOR 
 # CORRELATION. HOW CAN I KNOW IF CORRELATION TOO LARGE?
@@ -297,7 +321,7 @@ library(lme4)
 #                 data = dfindiv, family = binomial)
 
 # Fails
-
+"blue"
 # Individual glms
 model1 <- glm(Intrakranielles_Monitoring ~ max_AIS_head + age + sex + death, 
               data = dfindiv, family = binomial)
@@ -312,9 +336,8 @@ summary(model3)
 
 # NOTE
 "red"
-# HOW CAN I VISUALIZE / SUMMARIZE THE FINDINGS OF THESE MODELS? --> CHATGPT
-# HOW CAN I CHECK IF IT SUITS THE DATA? --> CHATGPT
-
+# HOW CAN I VISUALIZE / SUMMARIZE THE FINDINGS OF THESE MODELS (model1, model2, model3)? --> CG
+# HOW CAN I CHECK IF IT SUITS THE DATA? --> CG
 
 
 
@@ -333,6 +356,11 @@ str(df_long)
 
 # fit
 df_long$age <- scale(df_long$age)
+
+
+
+"blue"
+
 multi_glmer <- glmer(intervention_received ~ max_AIS_head + age + sex + death + 
                        (1 | intervention_type),  
                      data = df_long, family = binomial)
@@ -341,22 +369,22 @@ summary(multi_glmer)
 
 # Model failed to converge again (with ranef for unique_case_id)
 # If no ranef for unique_case_id faster, but nearly unidentifiable (large eigenvalue)
-# --> rescale age --> no warnings
+# --> rescale age? --> no warnings
 
 
 
 
 
 # NOTE
-"red"
-# WHAT DOES IT MEAN IF NO RANEF FOR patients/case? Still valid? --> CHATGPT
+"blue"
+# WHAT DOES IT MEAN IF NO RANEF FOR patients/case? Still valid? --> CG
 # Answer: If cases have multiple interventions, then observations from the same case are correlated.
 #         Ignoring this could lead to underestimated standard errors, meaning p-values might be misleading.
 # --> REMOVE SOME HIGHLY CORRELATED VARIABLES? OR WHAT TO DO? --> MÄCHLER
 
 # NOTE
-"red"
-# FIGURE OUT VISUALIZATION OF RESULTS --> CHATGPT
+"blue"
+# VISUALIZATION OF RESULTS
 library(sjPlot)
 plot_model(multi_glmer, type = "est", show.values = TRUE, show.p = TRUE)
 
@@ -371,8 +399,8 @@ ggplot(ranefs, aes(x = reorder(intervention_type, `(Intercept)`), y = `(Intercep
   coord_flip()
 
 # NOTE
-"red"
-# INTERPRETATION --> ASK CHATGPT
+"blue" # maybe?
+# INTERPRETATION --> ASK CG
 # Intercept (-6.39)
 # Very low log-odds --> intervention is rare overall.
 # max_AIS_head3 (2.55)
@@ -390,12 +418,26 @@ ggplot(ranefs, aes(x = reorder(intervention_type, `(Intercept)`), y = `(Intercep
 
 
 
+###
+# Notes
+
+# Control add ISS
+
+# Age as categorical (bc truncated)
+
+# AIS as ordered factor! not just categorical (R functions use different contrasts)
 
 
+# polr in MASS package --> glm for more than one category
+
+# split dataset by intervention type and run glm for each one? 
+
+# HArd do answer (Second), maybe not possible. Can't answer? Need extra data (history data of patients)
+# --> why answer? What is idea?
 
 
-
-
+## Compare models w/ different complexity
+## Look at residuals (in continuous these make sense and are well defined)
 
 
 
