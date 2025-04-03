@@ -19,6 +19,9 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(data.table)
 library(rio)
+
+# Permanently set working directory to parent folder for all chunks
+knitr::opts_knit$set(root.dir = normalizePath(".."))
 ```
 
 ## Vitals
