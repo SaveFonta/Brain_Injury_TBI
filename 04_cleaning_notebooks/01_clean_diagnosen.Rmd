@@ -14,17 +14,26 @@ inspect_path <- "03_spreadsheets/"
 # for export of clean data
 clean_path <- "02_data/02_clean_data/"
 
-knitr::opts_chunk$set(echo = TRUE)
+
 
 library(data.table)
 library(rio)
 library(dplyr)
 library(tidyr)
+knitr::opts_chunk$set(echo = TRUE)
 
+# Permanently set working directory to parent folder for all chunks
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+```
+
+```{r verify, echo=FALSE}
+# Verify the working directory changed
+cat("New working directory:", getwd())
 ```
 
 ```{r Diagnosen}
 # function for data import from .csv files
+getwd()
 import_dataset <- function(...) {
   import_list(..., rbind = TRUE, setclass = "data.table")
 }
