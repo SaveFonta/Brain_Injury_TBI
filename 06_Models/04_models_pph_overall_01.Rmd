@@ -1,0 +1,324 @@
+---
+title: "Model: Four Dimensions of polytrauma pathophysiology vs. TBI"
+output: html_document
+date: "2025-04-01"
+author: jaegerl
+---
+
+```{r setup, include=FALSE}
+# define paths
+# for data import
+import_path <- "02_data/01_raw_data/"
+# for export of inspection objects (spreadsheets)
+inspect_path <- "03_spreadsheets/"
+# for export of clean data
+clean_path <- "02_data/02_clean_data/"
+# for intermediate results
+intermediate_path <- "02_data/03_dump/"
+# for tables
+table_path <- "04_tables/"
+# for figures
+figure_path <- "05_figures/"
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(data.table)
+library(rio)
+library(tableone)
+library(vcd)
+library(poLCA)
+library(glmmTMB)
+library(tidyverse)
+
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+```
+
+
+## Build and Explore Dataset
+
+Do we even see differences in pathophysiology by, say, degree of TBI?
+
+Make a population dataset first.
+
+```{r explore1}
+# patient population and TBI diagnoses
+load(paste0(clean_path, "Diagnosis_cleaned.RData"))
+setDT(Diagnosis_cleaned)
+# demographics, hospital stay, ICU stay
+load(paste0(clean_path, "patients_clean.RData"))
+# pathophysiology at admission
+load(paste0(clean_path, "vitals_clean.RData"))
+load(paste0(clean_path, "lab_clean.RData"))
+# trauma scores
+load(paste0(clean_path, "iss_clean.RData"))
+load(paste0(clean_path, "mapping_cleaned.RData"))
+# interventions
+load(paste0(clean_path, "interventions1_wide.RData"))
+
+# get demographics into the population
+diagnoses <- c("bleeding", "fracture", "concussion",
+               "brain_edema", "brain_compression",
+               "unconsciousness")
+Diagnosis_cleaned[, (diagnoses) := lapply(.SD, \(x) as.integer(as.character(x))),
+                  .SDcols = diagnoses]
+population <- merge(Diagnosis_cleaned[, .(research_case_id,
+                                          date,
+                                          bleeding,
+                                          fracture,
+                                          concussion,
+                                          brain_edema,
+                                          brain_compression,
+                                          unconsciousness)],
+                    y = patients_clean[, .(research_case_id,
+                                           age, elderly, sex,
+                                           stay_days, icu, icu_days,
+                                           death, death_days)],
+                    by = "research_case_id",
+                    all.x = TRUE)
+# identify those with TBI in a separate dataset with the diagnoses
+tbi <- Diagnosis_cleaned[bleeding + fracture + concussion + 
+                           brain_edema + brain_compression +
+                           unconsciousness > 0]
+population[, tbi := as.integer(research_case_id %in% tbi$research_case_id)]
+# get vitals of patients
+population <- merge(x = population,
+                    y = vitals_clean,
+                    by = "research_case_id",
+                    all.x = TRUE)
+# get lab data of patients
+population <- merge(x = population,
+                    y = lab_clean_wide,
+                    by = "research_case_id",
+                    all.x = TRUE)
+# get ISS of patients
+population <- merge(x = population,
+                    y = iss_clean,
+                    by = "research_case_id",
+                    all.x = TRUE)
+
+# calculate region AIS of each patient as maximum AIS value for that region
+ais <- mapping_cleaned[, .(ais = max(MAX_AIS_SEVERITY)),
+                       by = .(research_case_id,
+                              AIS_CHAPTER)]
+# define the names of the ais regions
+ais_regions <- data.table(
+  AIS_CHAPTER = -1:9,
+  ais_region = c("No Map", "Other Trauma",
+                 "Head", "Face", "Neck",
+                 "Thorax", "Abdomen", "Spine",
+                 "Upper Extremity", "Lower Extremity", "Unspecified"))
+ais <- merge(ais,
+             y = ais_regions,
+             by = "AIS_CHAPTER",
+             all.x = TRUE)
+table(ais$ais_region)
+# convert to a wide table
+ais <- dcast(ais, research_case_id ~ ais_region, value.var = "ais")
+ais <- ais[, mget(c("research_case_id", ais_regions$ais_region))]
+# merge into population data
+population <- merge(population,
+                    ais,
+                    by = "research_case_id",
+                    all.x = TRUE)
+# identify those with missing values
+population[, `:=`(novital = as.integer(!(research_case_id %in% 
+                                           vitals_clean$research_case_id)),
+                  nolab = as.integer(!research_case_id %in%
+                                       lab_clean_wide$research_case_id),
+                  noais = as.integer(!(research_case_id %in%
+                                         ais$research_case_id)),
+                  noiss = as.integer(is.na(iss)))]
+
+# identify patients with polytrauma as AIS > 0 in at least two body regions
+polytrauma <- mapping_cleaned[MAX_AIS_SEVERITY > 0 & AIS_CHAPTER != 1
+][, .(n_regions = n_distinct(AIS_CHAPTER)),
+  by = .(research_case_id)]
+population <- merge(population,
+                    y = polytrauma,
+                    by = "research_case_id",
+                    all.x = TRUE)
+population[is.na(n_regions), n_regions := 0]
+population[, polytrauma := as.integer(n_regions >= 2)]
+
+# define pathophysiology indicators
+population[, `:=`(hypotension = as.integer(bp < 60),
+                  tachycardia = as.integer(hr > 100),
+                  acidosis = as.integer(lactate > 2),
+                  severethoracic = as.integer(Thorax >= 2),
+                  majortrauma = as.integer(iss >= 15),
+                  anemia = as.integer(hemoglobin < 80),
+                  coagulopathy = as.integer(inr >= 1.4),
+                  hypothermia = as.integer(temperature < 35))]
+# I guess that for all of these indicators, not measured can be regarded as 
+# absent...
+pph <- c("hypotension", "tachycardia", "anemia",
+         "severethoracic", "majortrauma",
+         "acidosis", "coagulopathy", 
+         "hypothermia")
+population[, (pph) := lapply(.SD, \(x) ifelse(is.na(x), 0, x)), .SDcols = pph]
+
+# categorize GCS
+population[, gcs_cat := case_when(
+  is.na(gcs) ~ "0.unknown",
+  gcs >= 13 ~ "1.mild",
+  gcs >= 9 ~ "2.moderate",
+  gcs <=8 ~ "3.severe")]
+
+# identify presence of invasive intervention
+interventions1_wide[, invasive := as.integer(
+  rowSums(interventions1_wide[, .SD, .SDcols = !c(1, 2)]) > 0)]
+population <- merge(x = population,
+                    y = interventions1_wide[, .(research_case_id,
+                                                invasive)],
+                    by = "research_case_id",
+                    all.x = TRUE)
+# as discussed with the client, those without a record of interventions simply
+# had no intervention
+population[is.na(invasive), invasive := 0]
+
+# define age categories
+population[, age_cat := case_when(
+  age < 40 ~ "1.<40",
+  age < 60 ~ "2.40-59",
+  age < 80 ~ "3.60-78",
+  TRUE ~ "4.79+")]
+
+# define pathophysiology variables
+pph <- c("hypotension", "tachycardia", "anemia",
+         "severethoracic", "majortrauma",
+         "acidosis", "coagulopathy",
+         "hypothermia")
+# define injuries
+injuries <- c("bleeding",
+              "fracture",
+              "concussion",
+              "brain_edema",
+              "brain_compression",
+              "unconsciousness")
+# define relevant patient characteristics
+characteristics <- c("gcs_cat", 
+                     "sex", 
+                     "age_cat",
+                     "invasive")
+
+pph_data <- population[, c("research_case_id",
+                           pph,
+                           injuries,
+                           characteristics), with = FALSE]
+pph_data <- melt(pph_data, 
+                 measure.vars = pph, variable.name = "pph",
+                 value.name = "altered",
+                 id.vars = c("research_case_id",
+                             injuries,
+                             characteristics)
+                 )[order(research_case_id)]
+
+# define the four dimensions of pathophysiology
+pph_data[, pph_dim := case_when(
+  pph %in% c("hypotension", "tachycardia", "anemia") ~ "shock",
+  pph == "coagulopathy" ~ "coagulopathy",
+  pph %in% c("severethoracic", "majortrauma", "acidosis") ~ "softtissue",
+  pph == "hypothermia" ~ "hypothermia")]
+dimensions <- c("shock", "coagulopathy", "softtissue", "hypothermia")
+
+CreateTableOne(data = population,
+               vars = c(pph, "gcs_cat"),
+               strata = "tbi",
+               factorVars = pph) |> 
+  print(test = FALSE, noSpaces = TRUE)
+```
+It does look like there are several differences in the pathophysiology of polytrauma between patients with and without TBI:
+
+* Signs of shock (hypothension, tachycardia) are more common in TBI.
+* Coagulopathy is more common in TBI.
+* Severe soft tissue injuries (as expressedy by total ISS and severe thoracic injury) are more common in TBI. Acidosis is much more common in TBI.
+* Hypothermia is more common in TBI.
+
+On the other hand, it is not clear if these differences are simply an expression of TBI cases being involved in more severe polytrauma, as may be indicated by the higher ISS in TBI cases.
+
+Also note that the single alterations in pathophysiology measures can be very rare (esp. hypothermia). It may make sense to merge the categories for shock and soft tissue injury by logical dijunction, that is, `shock` as `hypotension | tachycardia | anemia` and `softtissue` as `severethoracic | majortrauma | acidosis`.
+
+```{r explore2}
+population[, `:=`(shock = as.integer(hypotension | tachycardia | anemia),
+                  softtissue = as.integer(severethoracic | majortrauma | acidosis),
+                  coagulopathy = as.integer(coagulopathy),
+                  hypothermia = as.integer(hypothermia))]
+CreateTableOne(data = population,
+               vars = dimensions,
+               strata = "tbi",
+               factorVars = dimensions) |> 
+  print(test = FALSE, noSpaces = TRUE)
+```
+Let us see if alterations in the different dimensions of pathophysiology differ by ISS. Note that soft tissue injury occurs by definition whenever ISS is at least 16. When adjusting for ISS, it may make sense to remove the ISS criterion from soft tissue injury.
+
+
+```{r explore3}
+# define ISS categories
+population[, softtissue2 := as.integer(severethoracic | acidosis)]
+population[, iss_cat := case_when(
+  iss <= 8 ~ "1.1-8",
+  iss <= 15 ~ "2.9-15",
+  iss <= 24 ~ "3.16-24",
+  iss >= 25 ~ "4.25+")]
+table(population[polytrauma == 1, (iss_cat)], useNA = "always")
+CreateTableOne(data = population[polytrauma == 1],
+               vars = gsub(x = dimensions, 
+                           pattern = "softtissue",
+                           replacement = "softtissue2"),
+               strata = "iss_cat",
+               factorVars = c(dimensions, "softtissue2")) |> 
+  print(test = FALSE, noSpaces = TRUE)
+```
+The severer the polytrauma, the more common the alterations in the different dimensions of pathophysiology. 
+
+## A First Model
+
+Fit a first multivariate logistic regression model that relates alterations in the different dimensions of pathophysiology with the different patient characteristics, including GCS at baseline (categorized), age (categorized), sex, presence of invasive surgery, and the different types of injuries (bleeding, fracture, etc.). The outcome variable `altered` is binary and denotes whether the corresponding pathophyisiology parameter is altered. The model includes a random intercept for each case The model is fitted using the `glmmTMB` package.
+
+
+```{r pph1}
+dimensions <- c("shock", "coagulopathy", "softtissue2", "hypothermia")
+characteristics <- c("gcs_cat", 
+                     "iss_cat",
+                     "sex", 
+                     "age_cat",
+                     "invasive")
+pph_data <- population[, c("research_case_id",
+                           dimensions,
+                           injuries,
+                           characteristics), with = FALSE]
+pph_data <- melt(pph_data, 
+                 measure.vars = dimensions, 
+                 variable.name = "dimension",
+                 value.name = "altered",
+                 id.vars = c("research_case_id",
+                             injuries,
+                             characteristics)
+                 )[order(research_case_id)]
+pph_model1 <- glmmTMB(altered ~ gcs_cat + invasive + iss_cat + sex + age_cat +
+                        (1 | research_case_id),
+                      data = pph_data,
+                      family = "binomial")
+summary(pph_model1)
+```
+
+More complex version that may be more appropriate for the research question: Allow different coefficients for TBI by pathophysiology dimension:
+
+```{r pph1_2}
+pph_model1_2 <- glmmTMB(altered ~ gcs_cat*dimension + invasive + 
+                          iss_cat + sex + age_cat +
+                          (1 | research_case_id),
+                        data = pph_data,
+                        family = "binomial")
+summary(pph_model1_2)
+```
+
+This looks promising!
+
+Note that this first model involved the entire population of patients -- we will have to restrict to those with polytrauma only.
+
+After supervisor meeting: 
+
+* Use more categories and model ordinal variables as ordered factors.
+* Perform some model diagnostics (half-normal plots, RE plots, etc.).
+* Fit single models to the different outcomes.
