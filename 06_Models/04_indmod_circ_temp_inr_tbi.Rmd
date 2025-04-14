@@ -1,0 +1,514 @@
+---
+title: "Individual Models: Circulation, Temperature, INR vs. TBI"
+output: html_document
+date: "2025-04-14"
+author: vjohner
+---
+
+```{r setup, include=FALSE}
+
+rm(list = ls())
+
+clean_path <- "02_data/02_clean_data/"
+# for models?
+# model_path <- "05_models/"
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+library(data.table)
+library(lme4)      # For mixed effects models
+library(lmerTest)  # For p-values in mixed models
+library(ggplot2)   # For plotting
+library(tidyverse)
+library(car)       # For diagnostic plots
+library(pROC)      # For ROC curves
+
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+```
+
+## Load and Prepare Data
+
+```{r load_data}
+
+load(paste0(clean_path, "patients_clean.RData"))
+load(paste0(clean_path, "vitals_clean.RData"))
+load(paste0(clean_path, "lab_clean.RData"))
+load(paste0(clean_path, "mapping_cleaned.RData"))
+load(paste0(clean_path, "iss_clean.RData"))
+load(paste0(clean_path, "Diagnosis_cleaned.RData"))
+load(paste0(clean_path, "interventions1_wide.RData"))
+
+# Define injury variables
+injuries <- c("bleeding", "fracture", "concussion",
+              "brain_edema", "brain_compression",
+              "unconsciousness")
+
+# Convert diagnosis variables to integers
+setDT(Diagnosis_cleaned)
+Diagnosis_cleaned[, (injuries) := lapply(.SD, \(x) as.integer(as.character(x))),
+                  .SDcols = injuries]
+
+# Create base population dataset
+population <- merge(Diagnosis_cleaned[, c("research_case_id", "date", injuries), with=FALSE],
+                    y = patients_clean[, .(research_case_id,
+                                           age, sex)],
+                    by = "research_case_id",
+                    all.x = TRUE)
+
+# Get vitals of patients
+population <- merge(x = population,
+                    y = vitals_clean,
+                    by = "research_case_id",
+                    all.x = TRUE)
+
+# Get lab data of patients
+population <- merge(x = population,
+                    y = lab_clean_wide,
+                    by = "research_case_id",
+                    all.x = TRUE)
+
+# Get ISS of patients
+population <- merge(x = population,
+                    y = iss_clean,
+                    by = "research_case_id",
+                    all.x = TRUE)
+
+# Identify patients with polytrauma
+polytrauma <- mapping_cleaned[MAX_AIS_SEVERITY > 0 & AIS_CHAPTER != 1
+][, .(n_regions = n_distinct(AIS_CHAPTER)),
+  by = .(research_case_id)]
+population <- merge(population,
+                    y = polytrauma,
+                    by = "research_case_id",
+                    all.x = TRUE)
+population[is.na(n_regions), n_regions := 0]
+population[, polytrauma := as.integer(n_regions >= 2)]
+
+# Add interventions data (with a variable invasive if there was an intervention)
+interventions1_wide[, invasive := as.integer(
+  rowSums(interventions1_wide[, .SD, .SDcols = !c(1, 2)]) > 0)]
+population <- merge(x = population,
+                    y = interventions1_wide[, .(research_case_id,
+                                                invasive)],
+                    by = "research_case_id",
+                    all.x = TRUE)
+# Set missing invasive values to 0
+population[is.na(invasive), invasive := 0]
+
+# Define categorical variables WITH ORDERING
+# Creating 10-year age intervals for age categories
+population[, age_cat := factor(
+  x = case_when(
+    age < 30 ~ "1.<30",
+    age < 40 ~ "2.30-39",
+    age < 50 ~ "3.40-49",
+    age < 60 ~ "4.50-59",
+    age < 70 ~ "5.60-69", 
+    age < 79 ~ "6.70-78",
+    TRUE ~ "7.79+"
+  ), 
+  levels = c("1.<30", "2.30-39", "3.40-49", "4.50-59", "5.60-69", "6.70-78", "7.79+"),
+  ordered = TRUE
+)]
+
+# GCS categories as an ordered factor (severity increases)
+population[, gcs_cat := factor(
+  x = case_when(
+    is.na(gcs) ~ "0.unknown",
+    gcs >= 13 ~ "1.mild",
+    gcs >= 9 ~ "2.moderate",
+    gcs <= 8 ~ "3.severe"
+  ),
+  levels = c("0.unknown", "1.mild", "2.moderate", "3.severe"),
+  ordered = TRUE
+)]
+
+# ISS categories as an ordered factor (severity increases)
+population[, iss_cat := factor(
+  x = case_when(
+    iss <= 8 ~ "1.1-8",
+    iss <= 15 ~ "2.9-15",
+    iss <= 24 ~ "3.16-24",
+    iss >= 25 ~ "4.25+"
+  ),
+  levels = c("1.1-8", "2.9-15", "3.16-24", "4.25+"),
+  ordered = TRUE
+)]
+
+# Create polytrauma dataset
+polytrauma_dataset <- population[polytrauma == 1, .(
+  # Unique identifiers
+  research_case_id,
+  
+  # Variables for models
+  bp,                 # Blood pressure
+  hr,                 # Heart rate
+  temperature,        # Temperature (outcome)
+  inr,                # INR (outcome)
+  
+  # Control variables
+  iss,                # ISS score
+  iss_cat,            # ISS categorized (ordered)
+  invasive,           # Invasive intervention (dummy)
+  gcs,                # Glasgow Coma Scale
+  gcs_cat,            # GCS categorized (ordered)
+  sex,                # Sex
+  age,                # Age
+  age_cat,            # Age categorized (ordered)
+  
+  # Injury variables
+  bleeding,           # Bleeding injury
+  fracture,           # Fracture injury
+  concussion,         # Concussion injury
+  brain_edema,        # Brain edema injury
+  brain_compression,  # Brain compression injury
+  unconsciousness     # Unconsciousness injury
+)]
+
+# Ensure binary variables are proper factors (not ordered)
+polytrauma_dataset[, `:=`(
+  sex = factor(sex),
+  invasive = factor(invasive),
+  bleeding = factor(bleeding),
+  fracture = factor(fracture),
+  concussion = factor(concussion),
+  brain_edema = factor(brain_edema),
+  brain_compression = factor(brain_compression),
+  unconsciousness = factor(unconsciousness)
+)]
+
+# Create long-format dataset for BP and HR
+bp_hr_long <- melt(polytrauma_dataset, 
+                   id.vars = c("research_case_id", "gcs_cat", "iss_cat", "invasive", 
+                              "sex", "age_cat", "bleeding", "fracture", "concussion", 
+                              "brain_edema", "brain_compression", "unconsciousness"),
+                   measure.vars = c("bp", "hr"),
+                   variable.name = "vital_sign",
+                   value.name = "value")
+
+# Create combined GCS and vital sign variable
+bp_hr_long[, gcs_vital := paste(gcs_cat, vital_sign, sep = "_")]
+
+# Remove unnecessary variables
+rm(Diagnosis_cleaned, interventions1_wide, iss_clean, lab_clean, lab_clean_wide, mapping_cleaned, polytrauma, vitals_clean, patients_clean)
+```
+
+SAVE: You can edit the next R chunk (I think) and push it, I won't work on it anymore today, I'll text you when I work on it again (but I mean you can just copy paste it in your script when you changed it to the final version or at least the version Levy used), then we work with the same thing.
+
+```{r deal_with_nas}
+
+# Remove NAs in BP and HR (probably indeed missing a)
+polytrauma_dataset <- polytrauma_dataset %>% drop_na(bp, hr)
+bp_hr_long <- bp_hr_long %>% drop_na(value)
+
+# SAVE CHECK WHAT YOU WANT TO DO HERE! EITHER WE LEAVE IT LIKE THAT OR WE USE CLASSIFICATIONS AS LEVY DID
+# Remove NAs in temperature and inr as well (idk what to do with them)
+polytrauma_dataset <- polytrauma_dataset %>% drop_na(temperature, inr)
+
+````
+
+## Exploratory Data Analysis
+
+```{r explore_data}
+# Check the structure of our polytrauma dataset
+str(polytrauma_dataset)
+
+# Confirm ordered factors are correctly defined
+is.ordered(polytrauma_dataset$gcs_cat)
+is.ordered(polytrauma_dataset$iss_cat)
+is.ordered(polytrauma_dataset$age_cat)
+
+# Distribution of ordered factors
+table(polytrauma_dataset$gcs_cat)
+table(polytrauma_dataset$iss_cat)
+table(polytrauma_dataset$age_cat)
+
+# Summary statistics of key variables
+summary(polytrauma_dataset[, .(bp, hr, temperature, inr)])
+
+# Check missing values in key variables
+missing_values <- colSums(is.na(polytrauma_dataset))
+print(missing_values)
+
+# Distribution of key outcome variables
+par(mfrow=c(2,2))
+hist(polytrauma_dataset$bp, main="Blood Pressure Distribution", xlab="BP")
+hist(polytrauma_dataset$hr, main="Heart Rate Distribution", xlab="HR")
+hist(polytrauma_dataset$temperature, main="Temperature Distribution", xlab="Temperature")
+hist(polytrauma_dataset$inr, main="INR Distribution", xlab="INR")
+par(mfrow=c(1,1))
+
+# Check if log transformations might be needed
+par(mfrow=c(2,2))
+qqnorm(polytrauma_dataset$temperature, main="Q-Q Plot for Temperature")
+qqline(polytrauma_dataset$temperature)
+qqnorm(log(polytrauma_dataset$temperature), main="Q-Q Plot for log(Temperature)")
+qqline(log(polytrauma_dataset$temperature))
+qqnorm(polytrauma_dataset$inr, main="Q-Q Plot for INR")
+qqline(polytrauma_dataset$inr)
+qqnorm(log(polytrauma_dataset$inr), main="Q-Q Plot for log(INR)")
+qqline(log(polytrauma_dataset$inr))
+par(mfrow=c(1,1))
+
+# Examine relationships between ordered factors and outcomes
+boxplot(bp ~ gcs_cat, data = polytrauma_dataset, 
+        main = "Blood Pressure by GCS Category", xlab = "GCS Category", ylab = "BP")
+boxplot(hr ~ gcs_cat, data = polytrauma_dataset,
+        main = "Heart Rate by GCS Category", xlab = "GCS Category", ylab = "HR")
+boxplot(temperature ~ gcs_cat, data = polytrauma_dataset,
+        main = "Temperature by GCS Category", xlab = "GCS Category", ylab = "Temperature")
+boxplot(inr ~ gcs_cat, data = polytrauma_dataset,
+        main = "INR by GCS Category", xlab = "GCS Category", ylab = "INR")
+```
+
+
+
+
+
+
+## Model 1: Blood Pressure and Heart Rate
+
+```{r model1}
+# Fit the model with BP and HR as outcomes in long format
+# Using ordered factors explicitly for proper interpretation of effects
+model1 <- lmer(value ~ vital_sign * gcs_cat + iss_cat + invasive + sex + age_cat + 
+               bleeding + fracture + concussion + brain_edema + brain_compression +
+               unconsciousness + (1|research_case_id), data = bp_hr_long)
+
+# Alternative model with sex interaction
+model1_sex <- lmer(value ~ vital_sign * gcs_cat + vital_sign * sex + iss_cat + invasive +
+                   age_cat + bleeding + fracture + concussion + brain_edema +
+                   brain_compression + unconsciousness + (1|research_case_id), 
+                   data = bp_hr_long)
+
+# Model summaries
+summary(model1)
+summary(model1_sex)
+
+# Compare models
+anova(model1, model1_sex)
+
+# Diagnostic plots for the better model
+par(mfrow=c(2,2))
+plot(model1)  # Basic diagnostic plots
+par(mfrow=c(1,1))
+
+# Check residuals
+qqnorm(resid(model1), main="Q-Q Plot of Residuals")
+qqline(resid(model1))
+
+# Half-normal plot of residuals (approximation using car package)
+car::qqPlot(resid(model1), distribution="norm", envelope=0.95,
+           main="Half-Normal Plot of Residuals", ylab="Residuals")
+
+# Predictions
+bp_hr_long$predicted <- predict(model1, newdata = bp_hr_long, allow.new.levels = TRUE, re.form = NULL)  # Include random effects
+
+# Plot predicted vs observed
+ggplot(bp_hr_long, aes(x=value, y=predicted)) +
+  geom_point(alpha=0.5) +
+  geom_abline(intercept=0, slope=1, color="red") +
+  facet_wrap(~vital_sign, scales="fixed") +
+  labs(title="Predicted vs Observed Values", x="Observed", y="Predicted") +
+  theme_minimal()
+
+# Examine interaction effects with ordered factors
+ggplot(bp_hr_long, aes(x=gcs_cat, y=value, fill=vital_sign)) +
+  geom_boxplot() +
+  facet_wrap(~vital_sign, scales="free_y") +
+  labs(title="BP and HR by GCS Category", x="GCS Category", y="Value") +
+  theme_minimal()
+```
+
+Interpretation? 
+
+vital_signhr significant negative --> heart rate is lower than blood pressure, all else equal
+vital_signhr:gcs_cat.L: This is the linear interaction trend between GCS and vital_sign = HR. A positive effect means that the effect of GCS category on HR increases linearly across levels.
+
+gcs_cat.L negative and significant --> Linear contrast for the GCS categor --> as severity increases (higher GCS category), the outcome (BP or HR) tends to decrease.
+gcs_cat.Q negative and significant --> Quadratic contrast. If also negative, there’s a curve—e.g., the decrease might slow down or flatten at extremes.
+
+We can see a significant positive linear effect of age_cat.
+
+Note that sex is not significant. Interaction as well (in sex model).
+
+*MODEL EVALUATION?*
+
+
+## Model 2: Temperature as Outcome
+
+Note that since we only have temperature (single outcome variable; continuous) and no multivariate case here, there's no point in fitting a lmer() model, since it's not sensible to have random effects for research_case_id (here, they are unique!).
+
+```{r model2}
+# Fit model for temperature using ordered factors
+model2 <- lm(temperature ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+             bleeding + fracture + concussion + brain_edema + brain_compression +
+             unconsciousness, data = polytrauma_dataset)
+
+summary(model2)
+
+# Try log transformation
+model2_log <- lm(log(temperature) ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+                 bleeding + fracture + concussion + brain_edema + brain_compression +
+                 unconsciousness, data = polytrauma_dataset)
+
+
+# Model summaries
+summary(model2)
+summary(model2_log)
+
+# Compare models
+AIC(model2, model2_log)
+
+# Choose better model based on AIC (use model2 or model2_log)
+better_model2 <- model2_log  # Change if model2_log has better AIC
+
+# Diagnostic plots
+par(mfrow=c(2,2))
+plot(better_model2)
+par(mfrow=c(1,1))
+
+# Half-normal plot of residuals
+car::qqPlot(resid(better_model2), distribution="norm", envelope=0.95,
+           main="Half-Normal Plot of Residuals", ylab="Residuals")
+
+# Predictions
+polytrauma_dataset$temp_predicted <- predict(better_model2, polytrauma_dataset)
+
+# Plot predicted vs observed
+ggplot(polytrauma_dataset, aes(x=temperature, y=temp_predicted)) +
+  geom_point(alpha=0.5) +
+  geom_abline(intercept=0, slope=1, color="red") +
+  labs(title="Predicted vs Observed Temperature", x="Observed", y="Predicted") +
+  theme_minimal()
+
+# Examine effects of ordered factors
+ggplot(polytrauma_dataset, aes(x=gcs_cat, y=temperature)) +
+  geom_boxplot() +
+  labs(title="Temperature by GCS Category", x="GCS Category", y="Temperature") +
+  theme_minimal()
+
+ggplot(polytrauma_dataset, aes(x=iss_cat, y=temperature)) +
+  geom_boxplot() +
+  labs(title="Temperature by ISS Category", x="ISS Category", y="Temperature") +
+  theme_minimal()
+
+ggplot(polytrauma_dataset, aes(x=age_cat, y=temperature)) +
+  geom_boxplot() +
+  labs(title="Temperature by Age Category", x="Age Category", y="Temperature") +
+  theme_minimal()
+```
+
+Diagnostic plots appear visually similar for the raw and log-transformed models, the log transformation led to improved residual normality, stabilized variance, and a substantially better AIC, justifying its selection
+
+Interpretation more difficult:
+Higher GCS, higher ISS, and older age predict lower log temperature.
+Bleeding, concussion, and are associated with higher log temperature.
+
+Male not significant at 95% (but would be higher temp if 90%).
+
+
+## Model 3: INR as Outcome
+
+Same thing as above; just use lm.
+
+```{r model3}
+# Fit model for INR using ordered factors
+model3 <- lm(inr ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+             bleeding + fracture + concussion + brain_edema + brain_compression +
+             unconsciousness, data = polytrauma_dataset)
+
+# Try log transformation
+model3_log <- lm(log(inr + 0.01) ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+                 bleeding + fracture + concussion + brain_edema + brain_compression +
+                 unconsciousness, data = polytrauma_dataset)
+
+# Model summaries
+summary(model3)
+summary(model3_log)
+
+# Compare models
+AIC(model3, model3_log)
+
+# Choose better model based on AIC
+better_model3 <- model3_log  # Change if model3_log has better AIC
+
+# Diagnostic plots
+par(mfrow=c(2,2))
+plot(better_model3)
+par(mfrow=c(1,1))
+
+# # Q-Q plot of residuals
+# qqnorm(resid(better_model3), main="Q-Q Plot of Residuals")
+# qqline(resid(better_model3))
+# 
+# # Half-normal plot of residuals
+# car::qqPlot(resid(better_model3), distribution="norm", envelope=0.95,
+#            main="Half-Normal Plot of Residuals", ylab="Residuals")
+# 
+# # Predictions
+# polytrauma_dataset$inr_predicted <- predict(better_model3, polytrauma_dataset, re.form=NULL)
+# 
+# # Plot predicted vs observed
+# ggplot(polytrauma_dataset, aes(x=inr, y=inr_predicted)) +
+#   geom_point(alpha=0.5) +
+#   geom_abline(intercept=0, slope=1, color="red") +
+#   labs(title="Predicted vs Observed INR", x="Observed", y="Predicted") +
+#   theme_minimal()
+
+# Examine relationship between INR and ordered factors
+ggplot(polytrauma_dataset, aes(x=gcs_cat, y=inr)) +
+  geom_boxplot() +
+  labs(title="INR by GCS Category", x="GCS Category", y="INR") +
+  theme_minimal()
+```
+
+Diagnostic plots pretty bad. 
+Residuals vs Fitted: Suggests heteroscedasticity
+Elbow: Suggests non-normality
+Scale-Location: Upward trend = increasing variance with fitted values, again suggesting heteroscedasticity.
+--> INR might still be skewed, even with the log.
+--> Possible zero-inflation or strong outliers (extreme INR values; although added 0.01)
+
+
+
+--> Try sth like this:
+
+```{r model3_robust}
+library(MASS)
+
+model3_robust <- rlm(log(inr + 0.01) ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+             bleeding + fracture + concussion + brain_edema + brain_compression +
+             unconsciousness, data = polytrauma_dataset)
+
+par(mfrow=c(2,2))
+plot(model3_robust)
+par(mfrow=c(1,1))
+
+
+# Or
+
+model3_gamma <- glm(inr ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+             bleeding + fracture + concussion + brain_edema + brain_compression +
+             unconsciousness, data = polytrauma_dataset, family = Gamma(link = "log"))
+
+par(mfrow=c(2,2))
+plot(model3_gamma)
+par(mfrow=c(1,1))
+
+
+# Check for extreme values
+summary(polytrauma_dataset$inr)
+boxplot(polytrauma_dataset$inr)
+boxplot(log(polytrauma_dataset$inr))
+```
+
+Both robust regression and gamma glm don't show better results. No wonder if we look at the boxplot. I don't know what to do.
+
+Alternative approach for model2 and model3: Use Levy's approach and use an ordered scale for inr and temperature to deal with NA's. Maybe that works better then (not lm anymore)
+
+Save: If you try it like Levy, could you please include the necessary code in the R chunk where I remove the NA's? So I can easily switch between the variants and I don't need to implement it myself again but can just run the models.
+
+
+
+
