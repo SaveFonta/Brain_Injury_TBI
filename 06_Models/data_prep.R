@@ -224,7 +224,7 @@ pop[is.na(invasive), invasive := 0]
 "Here we are putting invasive if any of the interventions was realized. Is it ok? Is interventions1_wide just
 a df with invasive interventions?? I hope so"
 
-
+"VALE: Levy and I have been using it like this. I think it's ok. Otherwise we would need to slightly adjust"
 
 # ────────────────────────────────────────────────────────────────────────────────
 # DATA TYPE CONVERSION
@@ -287,7 +287,7 @@ for (subset_name in names(subsets)) {
 }
 
 
-"Why tf the number for pop_poly is not the same number as the Venn daigram??"
+"Why tf the number for pop_poly is not the same number as the Venn diagram??"
 
 # Attach subsets to global environment 
 list2env(subsets, envir = .GlobalEnv)
@@ -300,3 +300,6 @@ saveRDS(object = pop, file = "02_data/02_clean_data/population.rds")
 saveRDS(object = pop_poly, file = "02_data/02_clean_data/population_poly.rds")
 saveRDS(object = pop_tbi, file = "02_data/02_clean_data/population_tbi.rds")
 saveRDS(object = pop_poly_tbi, file = "02_data/02_clean_data/population_poly_tbi.rds")
+
+
+
