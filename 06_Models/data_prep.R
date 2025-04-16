@@ -106,9 +106,9 @@ ais <- mapping_cleaned[, .(ais = max(MAX_AIS_SEVERITY)),
 # Map numeric AIS_CHAPTER codes to region names
 ais_regions <- data.table(
   AIS_CHAPTER = -1:9,
-  ais_region = c("No Map", "Other Trauma", "Head", "Face", "Neck",
-                 "Thorax", "Abdomen", "Spine", "Upper Extremity",
-                 "Lower Extremity", "Unspecified")
+  ais_region = c("No_Map", "Other_Trauma", "Head", "Face", "Neck",
+                 "Thorax", "Abdomen", "Spine", "Upper_Extremity",
+                 "Lower_Extremity", "Unspecified")
 )
 
 # Add region names to AIS data
@@ -120,6 +120,23 @@ ais <- ais[, mget(c("research_case_id", ais_regions$ais_region))]
 
 # Merge region AIS into pop
 pop <- merge(pop, ais, by = "research_case_id", all.x = TRUE)
+
+#set NA to zero for those variables
+pop$Head[is.na(pop$No_Map)] <- 0
+pop$Head[is.na(pop$Other_Trauma)] <- 0
+pop$Head[is.na(pop$Head)] <- 0
+pop$Face[is.na(pop$Face)] <- 0
+pop$Neck[is.na(pop$Neck)] <- 0
+pop$Thorax[is.na(pop$Thorax)] <- 0
+pop$Abdomen[is.na(pop$Abdomen)] <- 0
+pop$Spine[is.na(pop$Spine)] <- 0
+pop$Upper_Extremity[is.na(pop$Upper_Extremity)] <- 0
+pop$Upper_Extremity[is.na(pop$Lower_Extremity)] <- 0
+pop$Unspecified[is.na(pop$Unspecified)] <- 0
+
+
+
+
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -250,7 +267,7 @@ pop[, `:=`(
 "DEBATABLE:"
 # Convert AIS regions to ordered factors
 ais_regions <- c("Head", "Face", "Neck", "Thorax", "Abdomen", 
-                 "Spine", "Upper Extremity", "Lower Extremity")
+                 "Spine", "Upper_Extremity", "Lower_Extremity")
 pop[, (ais_regions) := lapply(.SD, \(x) ordered(x, levels = 0:6)), 
     .SDcols = ais_regions] 
 
