@@ -100,7 +100,7 @@ pop <- merge(pop, iss_clean, by = "research_case_id", all.x = TRUE)
 # ────────────────────────────────────────────────────────────────────────────────
 
 # Maximum AIS severity per region for each patient
-ais <- mapping_cleaned[, .(ais = max(MAX_AIS_SEVERITY)),
+ais <- mapping_cleaned[, .(ais = max(MAX_AIS_SEVERITY)),   #here Is where I trasform and just keep an AIS score for each person.
                        by = .(research_case_id, AIS_CHAPTER)]
 
 # Map numeric AIS_CHAPTER codes to region names

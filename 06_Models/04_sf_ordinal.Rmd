@@ -1,0 +1,462 @@
+---
+title: 'Ordinal Model: ISS, AIS thorax, AIS Head'
+author: "Saverio Fontana"
+date: "2025-04-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+
+clean_path <- "02_data/02_clean_data/"
+# for models?
+# model_path <- "05_models/"
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+library(data.table)
+library(lme4)      # For mixed effects models
+library(lmerTest)  # For p-values in mixed models
+library(ggplot2)   # For plotting
+library(tidyverse)
+library(car)       # For diagnostic plots
+library(pROC)      # For ROC curves
+library(ordinal)
+
+
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+```
+
+
+
+```{r load_data}
+poly <- readRDS(paste0(clean_path, "population_poly.rds"))
+
+# Distribution of ordered factors
+table(poly$gcs_cat)
+table(poly$iss_cat)
+#very imbalanced
+```
+
+
+
+```{r}
+# Check missing values in key variables
+missing_summary <- sapply(poly, function(x) sum(is.na(x)))
+missing_summary[missing_summary > 0]  # Show only variables with NAs
+```
+
+I am going to model iss_cat with a polr. No missing in it!
+
+
+```{r}
+library(ordinal)
+model <- clm(iss_cat ~ gcs_cat + invasive + sex + age_cat + 
+                 bleeding + fracture + concussion + brain_edema + brain_compression +
+                 unconsciousness, data = poly)
+summary(model)
+```
+Need to check PO assumption before considering the model reliable:
+
+
+Visual inspection and AIC BIC is what I will use. 
+
+
+
+First we specify two variables with non proportional odds. Can be for example.
+```{r}
+
+# Example: Allowing non-proportional odds for 'bleeding' and 'fracture'
+model_clm <- clm(iss_cat ~ gcs_cat + invasive + sex + age_cat +
+                     concussion + brain_edema + brain_compression +
+                     unconsciousness,
+                   data = poly,
+                   nominal = ~ bleeding + fracture) # Specify variables with non-proportional odds
+
+summary(model_clm)
+```
+
+
+
+Compare model to see if sign better the fit
+
+```{r}
+anova(model, model_clm)
+
+#Probably violated then, so we need the second 
+```
+
+
+Visual inspection:
+
+```{r}
+library(broom)
+library(ggplot2)
+
+# Extract coefficients and filter out threshold terms
+coef_data <- tidy(model_clm) %>%
+  filter(!grepl("\\|", term)) %>%  # Remove threshold terms (e.g., "1|2", "2|3")
+  mutate(
+    term = factor(term, levels = term[order(estimate)]),  # Order terms by estimate
+    significance = ifelse(p.value < 0.05, "Significant", "Non-significant")
+  )
+
+# Plot
+ggplot(coef_data, aes(x = estimate, y = reorder(term, estimate), color = significance)) +
+  geom_point(size = 3) +
+  geom_errorbarh(
+    aes(xmin = estimate - 1.96 * std.error, xmax = estimate + 1.96 * std.error),
+    height = 0.2
+  ) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+  scale_color_manual(values = c("Significant" = "blue", "Non-significant" = "gray")) +
+  labs(
+    title = "Coefficient Estimates with 95% Confidence Intervals",
+    x = "Log-Odds Estimate",
+    y = "Predictor",
+    color = "Significance"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+tidy(model_clm) %>%
+  filter(grepl("bleeding|fracture", term)) %>%  # Focus on non-proportional terms
+  ggplot(aes(x = estimate, y = term, color = as.factor(gsub(".*\\|", "", term)))) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = estimate - 1.96 * std.error, xmax = estimate + 1.96 * std.error)) +
+  labs(color = "ISS Threshold")
+```
+
+
+```{r}
+tidy(model_clm) %>%
+  filter(grepl("bleeding|fracture", term)) %>%  
+  separate(term, into = c("variable", "threshold"), sep = "\\|") %>%  
+  mutate(
+    variable = factor(variable),  
+    threshold = factor(threshold, levels = unique(threshold)),  # Keep original threshold order
+    # Create a combined factor with custom ordering
+    term_group = fct_rev(interaction(variable, threshold, sep = " | ", drop = TRUE))  
+  ) %>%  
+  ggplot(aes(
+    x = estimate,
+    y = term_group,  
+    color = variable  # Color by variable for visual grouping
+  )) +
+  geom_point() +
+  geom_errorbarh(aes(
+    xmin = estimate - 1.96 * std.error,
+    xmax = estimate + 1.96 * std.error
+  )) +
+  labs(
+    color = "Variable",
+    y = "Term (Variable | Threshold)",
+    x = "Estimate with 95% CI"
+  ) +
+  scale_y_discrete(labels = function(x) gsub("^.*\\|", "", x)) +  # Show only threshold on y-axis
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 9),
+    legend.position = "bottom"
+  )
+```
+
+
+gcs_cat: Worsening neurological status (from mild to severe) is significantly associated with higher injury severity scores. This relationship appears to have both linear and non-linear components.
+
+Sex: Male patients have a statistically significant higher likelihood of being in a more severe injury category compared to female patients.
+
+Age Category (age_cat): The relationship between age category and injury severity is complex and non-linear, with several age groups showing significant associations with iss_cat.
+
+Concussion: Surprisingly, the presence of a concussion is associated with a statistically significant lower likelihood of being in a more severe injury category. I honestly dont know maybe makes sense? 
+
+Invasive Procedures (invasive), Brain Edema (brain_edema), Brain Compression (brain_compression), and Unconsciousness (unconsciousness): These factors did not show statistically significant associations with injury severity in this model.
+
+Bleeding: The presence of bleeding consistently increases the likelihood of being in a higher injury severity category compared to being in a lower category. This effect is strongest when differentiating the lowest severity category from all others.
+
+Fracture: The impact of a fracture on injury severity varies. It strongly increases the likelihood of being in higher severity categories compared to the lowest. Notably, it also increases the likelihood of being in the highest severity category compared to the middle ones.
+
+
+
+I tried other visual inspecion:
+
+```{r}
+model_clm_extended <- clm(iss_cat ~ invasive + sex + 
+                                 concussion + brain_edema +
+                                brain_compression,
+                              data = poly,
+                              nominal = ~ bleeding + fracture + gcs_cat +
+                                        invasive + age_cat + unconsciousness)
+
+summary(model_clm_extended)
+
+anova(model_clm, model_clm_extended) #slightly better
+```
+Sex: Male patients have a significantly higher likelihood of being in a more severe injury category compared to female patients, and this effect is consistent across all severity levels.
+Concussion: The presence of a concussion is associated with a significantly lower likelihood of being in a more severe injury category, and this effect is consistent across all severity levels.
+
+
+Bleeding: The presence of bleeding significantly increases the likelihood of being in a higher injury severity category compared to being in a lower one at all severity thresholds. The strongest effect is in distinguishing the lowest severity injuries from more severe ones.
+Fracture: Fractures significantly increase the likelihood of being in higher severity categories compared to the lowest. Additionally, having a fracture significantly increases the likelihood of being in the highest severity category compared to the middle ones.
+GCS Category: More severe neurological impairment (as indicated by gcs_cat) is significantly associated with a higher likelihood of being in more severe injury categories at all thresholds. Specifically, the linear trend (gcs_cat.L) shows a significant negative association with being above each severity threshold, indicating that worsening GCS leads to higher injury severity. There are also significant non-linear effects, with the cubic trend (gcs_cat.C) showing a significant positive association with being above the middle and highest severity thresholds, and the quadratic trend (gcs_cat.Q) showing a significant negative association at the lowest threshold.
+Invasive Procedures: Undergoing an invasive procedure significantly decreases the likelihood of being in the lowest injury severity category compared to higher categories.
+Age Category:
+The linear trend of age (age_cat.L) shows a significant positive association with being above the middle and highest severity thresholds, suggesting that older age is linked to higher injury severity at these levels.
+The quadratic trend of age (age_cat.Q) also shows a significant positive association with being above the lowest and middle severity thresholds.
+The 4th-order polynomial of age (age_cat^4) shows a significant negative association with being above the lowest severity threshold.
+Unconsciousness: Being unconscious significantly decreases the likelihood of being in the lowest injury severity category compared to higher categories.
+
+
+
+
+Well the model actually improves...
+
+
+
+```{r}
+tidy(model_clm_extended) %>%
+  filter(grepl("bleeding|fracture|gcs_cat|invasive|age_cat|unconsciousness", term)) %>%  
+  separate(term, into = c("variable", "threshold"), sep = "\\|") %>%  
+  mutate(
+    variable = factor(variable),  
+    threshold = factor(threshold, levels = unique(threshold)),  # Keep original threshold order
+    # Create a combined factor with custom ordering
+    term_group = fct_rev(interaction(variable, threshold, sep = " | ", drop = TRUE))  
+  ) %>%  
+  ggplot(aes(
+    x = estimate,
+    y = term_group,  
+    color = variable  # Color by variable for visual grouping
+  )) +
+  geom_point() +
+  geom_errorbarh(aes(
+    xmin = estimate - 1.96 * std.error,
+    xmax = estimate + 1.96 * std.error
+  )) +
+  labs(
+    color = "Variable",
+    y = "Term (Variable | Threshold)",
+    x = "Estimate with 95% CI"
+  ) +
+  scale_y_discrete(labels = function(x) gsub("^.*\\|", "", x)) +  # Show only threshold on y-axis
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 9),
+    legend.position = "bottom"
+  )
+```
+Even though the extended model is significantly bettrer, I decided to keep the easier model only with bleedingand fracture as treshold varying cause the other variables, by visual inspection, have a varying treshold coefficient which is very similar (even if sometimes they are sign different at the 95) with overlapping CI and especially, the sign is the same, while for the first two, the sign is different.
+
+
+
+## Final fit
+
+
+```{r}
+autoplot.clm(model_clm)
+```
+
+
+
+```{r}
+summary(model_clm)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+These are some extensions tot he analysis
+```{r}
+nominal_test(model)  # Function directly from the ordinal package
+```
+
+
+
+```{r}
+#evaluate prediction, but not relevant
+library(caret)
+predicted <- predict(model_clm, type = "class")$fit
+caret::confusionMatrix(predicted, poly$iss_cat)
+```
+
+
+
+##############################
+MONOTOONE Trasformation of ais. Can be everything. Per sceglierlo guarda ai residui… i residui ci diono come trasformare la y
+Box e cox… ma poi non si perde linterpretazione?? 
+
+model ais continuous try at least 
+
+
+
+
+
+
+
+
+
+
+
+################################
+#TRY WITH CK (continuous outocome)
+  
+```{r}
+#DROP nas
+poly_ck <- poly %>% drop_na(ck)
+
+# Examine effects of ordered factors
+ggplot(poly_ck, aes(x=gcs_cat, y=ck)) +
+  geom_boxplot() +
+  labs(title="Temperature by GCS Category", x="GCS Category", y="Ck") +
+  theme_minimal()
+
+ggplot(poly_ck, aes(x=iss_cat, y=ck)) +
+  geom_boxplot() +
+  labs(title="Temperature by ISS Category", x="ISS Category", y="CK") +
+  theme_minimal()
+
+ggplot(poly_ck, aes(x=age_cat, y=ck)) +
+  geom_boxplot() +
+  labs(title="Temperature by Age Category", x="Age Category", y="CK") +
+  theme_minimal()
+```
+ 
+it's highly skewed. Maybe we need better ispection. 
+```{r}
+qqnorm(poly_ck$ck, main="Q-Q Plot") #mh
+
+#fit a lm anyway 
+model <- lm(ck ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+             bleeding + fracture + concussion + brain_edema + brain_compression +
+             unconsciousness, data = poly_ck)
+
+summary(model)
+
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(model)
+par(mfrow=c(1,1))
+
+# Half-normal plot of residuals
+car::qqPlot(resid(model), distribution="norm", envelope=0.95,
+           main="Half-Normal Plot of Residuals", ylab="Residuals")
+
+# Predictions
+poly_ck$ck_predicted <- predict(model, poly_ck)
+
+# Plot predicted vs observed
+ggplot(poly_ck, aes(x=ck, y=ck_predicted)) +
+  geom_point(alpha=0.5) +
+  geom_abline(intercept=0, slope=1, color="red") +
+  labs(title="Predicted vs Observed CK", x="Observed", y="Predicted") +
+  theme_minimal()
+```
+
+I have these outliers that really make the fit very difficult. Should I remove them? Clinically speaking are they possible
+
+Inspection of the outliers
+
+```{r}
+summary(poly_ck$ck)
+
+boxplot(poly_ck$ck, horizontal = TRUE, main = "Boxplot of CK Levels", col = "lightblue")
+
+Q1 <- quantile(poly_ck$ck, 0.25, na.rm = TRUE)
+Q3 <- quantile(poly_ck$ck, 0.75, na.rm = TRUE)
+IQR <- Q3 - Q1
+lower_bound <- Q1 - 1.5 * IQR
+upper_bound <- Q3 + 1.5 * IQR
+
+outliers <- poly_ck$ck[poly_ck$ck < lower_bound | poly_ck$ck > upper_bound]
+print(paste("Number of outliers:", length(outliers)))
+print(outliers)
+```
+
+Ok I have two ideas:
+1) Censor the 99th percentile 
+```{r}
+upper_limit <- quantile(poly_ck$ck, 0.99, na.rm = TRUE)
+poly_ck$ck_cut<- ifelse(poly_ck$ck > upper_limit, upper_limit, poly_ck$ck)
+summary(poly_ck$ck_cut)
+```
+
+```{r}
+qqnorm(poly_ck$ck_cut, main="Q-Q Plot") #mh
+
+model2 <- lm(ck_cut ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+             bleeding + fracture + concussion + brain_edema + brain_compression +
+             unconsciousness, data = poly_ck)
+
+summary(model2)
+
+anova(model, model2)
+```
+```{r}
+par(mfrow=c(2,2))
+plot(model2)
+par(mfrow=c(1,1))
+
+# Half-normal plot of residuals
+car::qqPlot(resid(model2), distribution="norm", envelope=0.95,
+           main="Half-Normal Plot of Residuals", ylab="Residuals")
+
+# Predictions
+poly_ck$ck_cut_predicted <- predict(model2, poly_ck)
+
+# Plot predicted vs observed
+ggplot(poly_ck, aes(x=ck_cut, y=ck_cut_predicted)) +
+  geom_point(alpha=0.5) +
+  geom_abline(intercept=0, slope=1, color="red") +
+  labs(title="Predicted vs Observed CK", x="Observed", y="Predicted") +
+  theme_minimal()
+```
+
+2) fit a log trasform
+
+```{r}
+model3 <- lm(log(ck_cut) ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+             bleeding + fracture + concussion + brain_edema + brain_compression +
+             unconsciousness, data = poly_ck)
+
+summary(model3)
+```
+compare the three
+
+```{r}
+AIC(model, model2, model3)
+BIC(model, model2, model3)
+```
+
+
+
+##########################################################
+TODO: does it make sense to add regional trauma indicators maybe when modelling ais? So in this way we know if certain injures location are more related to hhigher ais
+
+So for example we could model 
+Model AIS_Head and AIS_thorax. Maybe you need to go back to original df and fit a lmer to each AIS scoring
