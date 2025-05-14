@@ -9,6 +9,7 @@ library(ggplot2)
 library(MASS) # load before tidyverse, otherwise select() gets masked
 library(tidyverse)
 library(car) 
+library(sfsmisc)
 
 knitr::opts_knit$set(root.dir = normalizePath(".."))
 
@@ -31,6 +32,14 @@ poly <- poly %>% drop_na(bp, hr)
 
 # Also, a HR of 865 seems hardly normal, take it out
 poly <- poly %>% filter(hr < 250)
+
+
+# CAVEAT: REALIZED THAT THESE ARE NOT FACTORS!
+sapply(poly[, c("bleeding", "fracture", "concussion", "brain_edema", 
+                      "brain_compression", "unconsciousness")], class)
+# NEED TO ENCODE AS SUCH!
+poly <- poly %>% mutate(across(c(bleeding, fracture, concussion, brain_edema, 
+                                 brain_compression, unconsciousness), ~ factor(.)))
 
 
 ## ---- NA treatment and inr/quick analysis ----
@@ -84,22 +93,23 @@ fm_quick_nona <- lm(quick ~ gcs_cat + iss_cat + invasive + sex + age_cat +
                     bleeding + fracture + concussion + brain_edema + brain_compression +
                     unconsciousness, data = quick_nona)
 
-fm_quick_impna <- lm(quick ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
-                     bleeding + fracture + concussion + brain_edema + brain_compression +
-                     unconsciousness, data = quick_impna)
+# fm_quick_impna <- lm(quick ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+#                      bleeding + fracture + concussion + brain_edema + brain_compression +
+#                      unconsciousness, data = quick_impna)
 
 # Looks like there are only slight differences in the coefs (&sign.)
 summary(fm_quick_nona)
-summary(fm_quick_impna)
+# summary(fm_quick_impna)
 
 # Some diagnostics
 par(mfrow=c(2,2))
 plot(fm_quick_nona)
 par(mfrow=c(1,1))
 
-par(mfrow=c(2,2))
-plot(fm_quick_impna)
-par(mfrow=c(1,1))
+# par(mfrow=c(2,2))
+# plot(fm_quick_impna)
+# par(mfrow=c(1,1))
+
 # Almost no difference between imputed and omitted NAs. If I had to see sth, maybe the imputed NA seem
 # to have a slightly better QQ-plot. This is also the most worrying issue. Thus,
 # try squared quick (even stronger --> corresponds to boxcox w/ lambda -2)
@@ -108,12 +118,13 @@ fm_quick_sq <- lm(quick^2 ~ gcs_cat + iss_cat + invasive + sex + age_cat +
                   bleeding + fracture + concussion + brain_edema + brain_compression +
                   unconsciousness, data = quick_nona)
 
+summary(fm_quick_sq)
+
 par(mfrow=c(2,2))
 plot(fm_quick_sq)
 par(mfrow=c(1,1))
 # Looks better than non-squared version. However, how bad is the original scale? Is it worth transforming
 # and loosing interpretability? Can predict on original scale, but can't backtransform coefs!
-"blue"
 # Using boxcox to find best trafo
 boxcox(fm_quick_nona, lambda = seq(-2, 2, 0.1))
 boxcox(fm_quick_sq, lambda = seq(-2, 2, 0.1))
@@ -149,14 +160,7 @@ par(mfrow=c(1,1))
 
 ## ---- Quick Model: Try Stahel's Plot (Residuals against two predictors) ----
 
-library(sfsmisc)
-p.res.2x(x = as.numeric(quick_nona$age_cat),
-         y = as.numeric(quick_nona$gcs_cat),
-         z = resid(fm_quick_nona),
-         main = "Residuals vs Age and GCS (Quick²)",
-         xlab = "Age Category",
-         ylab = "GCS Category",
-         scol = c("red", "blue"))  # red for neg, blue for pos
+# red for neg, blue for pos
 
 # Tried several combinations, nothing worrying. Not that I suspected something tho.
 
@@ -172,17 +176,16 @@ library(robustbase)
 fm_temp_nona <- lmrob(temperature ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
                       bleeding + fracture + concussion + brain_edema + brain_compression +
                       unconsciousness, data = temp_nona, fast.s.large.n = Inf)
-fm_temp_impna <- lmrob(temperature ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
-                       bleeding + fracture + concussion + brain_edema + brain_compression +
-                       unconsciousness, data = temp_impna, fast.s.large.n = Inf)
+# fm_temp_impna <- lmrob(temperature ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+#                        bleeding + fracture + concussion + brain_edema + brain_compression +
+#                        unconsciousness, data = temp_impna, fast.s.large.n = Inf)
 summary(fm_temp_nona)
-summary(fm_temp_impna) # Some differences visible, not too much tho
+# summary(fm_temp_impna) # Some differences visible, not too much tho
 
 par(mfrow=c(2,3))
 plot(fm_temp_nona) # Note that this plot() function is different than the "normal" plot.lm!
 par(mfrow=c(1,1))
 # Not too bad I'd say, only the response vs fitted values seems a bit off 
-"blue"
 
 # Compare to standard lm model
 fm_temp_lm <- lm(temperature ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
@@ -202,9 +205,9 @@ qqline(weighted_resid, col = "red")
 
 
 # Note: No real difference btw imputed and omitted NA
-par(mfrow=c(2,3))
-plot(fm_temp_impna)
-par(mfrow=c(1,1))
+# par(mfrow=c(2,3))
+# plot(fm_temp_impna)
+# par(mfrow=c(1,1))
 
 
 
@@ -220,7 +223,7 @@ for (var in c("gcs_cat", "iss_cat", "invasive", "sex", "age_cat",
 par(mfrow=c(1,1))
 
 # I would guess looks ok!
-"blue"
+
 
 
 
@@ -247,48 +250,217 @@ ggplot(quick_nona, aes(x=gcs_cat, y=quick)) +
   geom_boxplot() +
   labs(title="Quick by GCS Category", x="GCS Category", y="Quick") +
   theme_minimal()
-ggplot(quick_impna, aes(x=gcs_cat, y=quick)) +
-  geom_boxplot() +
-  labs(title="Quick by GCS Category", x="GCS Category", y="Quick") +
-  theme_minimal()
+# ggplot(quick_impna, aes(x=gcs_cat, y=quick)) +
+#   geom_boxplot() +
+#   labs(title="Quick by GCS Category", x="GCS Category", y="Quick") +
+#   theme_minimal()
 # Also here, minor difference. Ofc, bit less var with impna.
 
-ggplot(quick_impna, aes(x=gcs_cat, y=quick^2)) +
-  geom_boxplot() +
-  labs(title="Quick by GCS Category", x="GCS Category", y="Quick") +
-  theme_minimal()
+# ggplot(quick_impna, aes(x=gcs_cat, y=quick^2)) +
+#   geom_boxplot() +
+#   labs(title="Quick by GCS Category", x="GCS Category", y="Quick") +
+#   theme_minimal()
 
 ## Temperature
 ggplot(temp_nona, aes(x=gcs_cat, y=temperature)) +
   geom_boxplot() +
   labs(title="Temperature by GCS Category", x="GCS Category", y="Temperature") +
   theme_minimal()
-ggplot(temp_impna, aes(x=gcs_cat, y=temperature)) +
-  geom_boxplot() +
-  labs(title="Temperature by GCS Category", x="GCS Category", y="Temperature") +
-  theme_minimal()
+# ggplot(temp_impna, aes(x=gcs_cat, y=temperature)) +
+#   geom_boxplot() +
+#   labs(title="Temperature by GCS Category", x="GCS Category", y="Temperature") +
+#   theme_minimal()
 # I can see no difference at all!
 
 
 
-## ---- Notes ----
+## ---- NOTES FROM MEETING ----
+
+
+# CAN TRY AROUND WITH MAKING GCS A BINARY (0 OR NOT) IN QUICK MODEL TO HAVE EVEN MORE
+# EASILY INTERPRETABLE RESULTS (MAYBE A BIT LESS PREDICTIVE POWER, BUT STILL OK AND WAY EASIER TO INTERPRET)
+# SAME THING: COULD ALSO DO LESS LEVELS FOR E.G. AGE (BUT NOT MOST IMPORTANT Q / ASPECT HE SAID)
+
+
+# ADD COLOR OF GCS VALUE IN LEVERAGE PLOT TO SEE IF FOUR GROUPS CORRESPOND TO GCS SCORES 
+# THEN, IF YES, TRY MODEL ONLY WITH HIGHER GCS SCORES (WITHOUT LEVEL 0)
+# TO SEE IF THERE'S SOMETHING GOING ON THERE
+
+# ALSO, LOWER BODY TEMP ARE MORE INTERESTING -> LOGISTIC W/ BINARY TOO LOW / NORMSL TEMP
+
+
+
+# DO BOXPLOTS FOR RESIDUALS AGAINST PREDICTORS FOR BINARY CASES (INSTEAD)
+# --> use methods formula
+
+
+# CAN ALSO RECYCLE SAVERIO'S SUMMARY OUTPUT PLOT CODE TO VISUALIZE
+
+
+
+
+"blue"
+# NEW
+# R Squared both for temp and quick very low. Is this even useable?
+# What is advantage of the binary gcs or additional levels? Doesn't make the model better
+# Update Leverage Plot not gcs groups!
+# Binary Temp Model really bad. Or I can't interpret.
+# CAVEAT: I realized that the injuries were not encoded as factors!
+# After fixing this, the residuals vs predictors plots show boxplots for these binary variables as well.
+# Nothing worrying.
+
+
+
+
+## ---- Binary GCS Quick Model ----
+
+# While doing a new binary gcs variable 0/not 0 I realized that there aren't that many 0, but many 1.
+# So the grouping in the Residuals vs Leverage plot is not what we assumed! 
+"blue"
+plot(quick_nona$gcs_cat)
+# I'll try a model with binary 0,1 vs 2,3 (not sure if good bc not a lot of obs for 2/3)
+# However, I'll try to color it (as he suggested) to see where this artifact comes from
+quick_nona <- quick_nona %>% 
+  mutate(gcs_bin = ifelse(gcs_cat == "0.unknown" | gcs_cat == "1.mild", 0, 1)) %>%
+  mutate(gcs_bin = factor(gcs_bin))
+
+fm_quick_bin <- lm(quick ~ gcs_bin + iss_cat + invasive + sex + age_cat + 
+                           bleeding + fracture + concussion + brain_edema + brain_compression +
+                           unconsciousness, data = quick_nona)
+
+summary(fm_quick_bin)
+# Some diagnostics
+par(mfrow=c(2,2))
+plot(fm_quick_bin)
+par(mfrow=c(1,1))
+
+"blue"
+# Doesn't really change anything in the diagnostics. 
+# Maybe still easier to interpret then and thus better in practice? ASK!!!
+
+
+## ---- Rework Levels ----
+
+# Create a new age variable with only 3 levels
+quick_nona <- quick_nona %>%
+  mutate(age_gen = case_when(
+    age_cat %in% c("1.<30", "2.30-39") ~ "1.<40",
+    age_cat %in% c("3.40-49", "4.50-59", "5.60-69") ~ "2.40-69",
+    age_cat %in% c("6.70-78", "7.79+") ~ "3.70<")) %>%
+  mutate(age_gen = factor(age_gen, 
+                             levels = c("1.<40", "2.40-69", "3.70<"), 
+                             ordered = TRUE))
+
+# Quite balanced
+plot(quick_nona$age_gen)
+
+fm_quick_gen <- lm(quick ~ gcs_bin + iss_cat + invasive + sex + age_gen + 
+                     bleeding + fracture + concussion + brain_edema + brain_compression +
+                     unconsciousness, data = quick_nona)
+
+# Still age is highly significant. Don't know what the advantage was here.
+summary(fm_quick_gen)
+
+
+## ---- Updated Leverage Plot ----
+
+# Prepare the data
+diagnostics_df <- data.frame(
+  leverage = hatvalues(fm_quick_nona),
+  std_resid = rstandard(fm_quick_nona),
+  gcs_cat = quick_nona$gcs_cat
+)
+
+# Plot with distinct colors
+ggplot(diagnostics_df, aes(x = leverage, y = std_resid, color = gcs_cat)) +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("black", "blue", "green", "red")) +
+  labs(
+    title = "Residuals vs Leverage",
+    x = "Leverage",
+    y = "Standardized Residuals",
+    color = "GCS Category"
+  ) +
+  theme_minimal()
+
+# Doesn't look like gcs is responsible for this clustering
+
+
+# Try around with different predictors
+diagnostics_df <- data.frame(
+  leverage = hatvalues(fm_quick_nona),
+  std_resid = rstandard(fm_quick_nona),
+  variable = quick_nona$iss_cat
+)
+ggplot(diagnostics_df, aes(x = leverage, y = std_resid, color = variable)) +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("black", "blue", "green", "red")) +
+  labs(
+    title = "Residuals vs Leverage",
+    x = "Leverage",
+    y = "Standardized Residuals",
+    color = "Level"
+  ) +
+  theme_minimal()
 
 
 
 
 
-# NOW WE CAN MAKE THE MODELS
 
-# QUICK: TRY LM
 
-# TEMP: USE PACKAGE ROBUST BASE (lmrob()) 
 
-#DO THE 4 BASIC PLOTS (FIRST STAGE)
-#THEN: PLOT RESIDUALS AGAINST ALL PREDICTORS
-#THEN MAYBE: PLOT WHERE SEE RESIDUALS VS TWO PREDICTORS FOR INTERACRTION
-#--> SFS.MISC AND SOME FUNCTION, ALSO IN STAHEL'S BOOK (stahel's residual plot against two X's)
 
-#WHEN USING LMROB RESIDUAL PLOT DIFFERENTLY --> WEIGHTED RESIDUALS SHOULD LOOK LIKE NORMAL, NOT NORMAL RESIDUALS
+
+
+
+
+
+
+
+## ---- Binary Temp Model ----
+
+# According to various sources, hypothermia happens if body temp drops below 35 degrees Celsius.
+# We'll look at a model where I have a binary variable with too low / ok
+
+temp_nona <- temp_nona %>% 
+  mutate(hypothermia = ifelse(temperature <= 35, 1, 0)) %>%
+  mutate(hypothermia = factor(hypothermia))
+
+table(temp_nona$hypothermia)
+
+fm_hypothermia <- glm(hypothermia ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+                      bleeding + fracture + concussion + brain_edema + brain_compression +
+                      unconsciousness, data = temp_nona, family = binomial(link = "logit"))
+
+library(boot)
+glm.diag.plots(fm_hypothermia)
+
+"blue"
+# Useless I guess, or I can't interpret my results.
+
+
+
+
+
+
+# SAVE'S SUMMARY PLOT!
+
+# ADD AIS THORAX VARIABLE (BINARY SEVERE_THORAX)
+
+# --> Save's going to add it in the dataset I load here (also factor encoding I corrected here)
+# --> check if done tmrw
+
+
+# ASK MÄCHLER IF ROBUST REGRESSION IF DOESN'T CHANGE OR LM()
+
+# MAKE A LIST OF MY QUESTIONS!
+
+
+
+
+
+
 
 
 
