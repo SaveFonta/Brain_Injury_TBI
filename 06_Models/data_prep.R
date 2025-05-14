@@ -122,8 +122,8 @@ ais <- ais[, mget(c("research_case_id", ais_regions$ais_region))]
 pop <- merge(pop, ais, by = "research_case_id", all.x = TRUE)
 
 #set NA to zero for those variables
-pop$Head[is.na(pop$No_Map)] <- 0
-pop$Head[is.na(pop$Other_Trauma)] <- 0
+pop$No_Map[is.na(pop$No_Map)] <- 0
+pop$Other_Trauma[is.na(pop$Other_Trauma)] <- 0
 pop$Head[is.na(pop$Head)] <- 0
 pop$Face[is.na(pop$Face)] <- 0
 pop$Neck[is.na(pop$Neck)] <- 0
@@ -131,7 +131,7 @@ pop$Thorax[is.na(pop$Thorax)] <- 0
 pop$Abdomen[is.na(pop$Abdomen)] <- 0
 pop$Spine[is.na(pop$Spine)] <- 0
 pop$Upper_Extremity[is.na(pop$Upper_Extremity)] <- 0
-pop$Upper_Extremity[is.na(pop$Lower_Extremity)] <- 0
+pop$Lower_Extremity[is.na(pop$Lower_Extremity)] <- 0
 pop$Unspecified[is.na(pop$Unspecified)] <- 0
 
 
@@ -259,9 +259,10 @@ pop[, `:=`(
   missing_iss = factor(missing_iss)
 )]
 
+#ah now use mutate (just to showcase some R knowledge)
+pop <- pop %>% mutate(across(c(bleeding, fracture, concussion, brain_edema, 
+                                 brain_compression, unconsciousness, elderly, icu, death), ~ factor(.)))
 
-# Optional: Convert injuries to factors if needed
-# pop[, (injuries) := lapply(.SD, factor), .SDcols = injuries]
 
 
 "DEBATABLE:"
@@ -271,6 +272,11 @@ ais_regions <- c("Head", "Face", "Neck", "Thorax", "Abdomen",
 pop[, (ais_regions) := lapply(.SD, \(x) ordered(x, levels = 0:6)), 
     .SDcols = ais_regions] 
 
+
+#ADD column severe_thoracic_injury (if Thorax >= 3)
+pop$severe_thoracic_injury <- factor(as.numeric(pop$Thorax >= 3))
+
+str(pop)
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -304,7 +310,7 @@ for (subset_name in names(subsets)) {
 }
 
 
-"Why tf the number for pop_poly is not the same number as the Venn diagram??"
+"Why the number for pop_poly is not the same number as the Venn diagram??"
 
 # Attach subsets to global environment 
 list2env(subsets, envir = .GlobalEnv)
