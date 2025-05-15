@@ -204,6 +204,15 @@ pop[, age_cat := factor(
   ordered = TRUE
 )]
 
+pop[, age_gen := factor(
+  x = case_when(
+    age < 40 ~ "1.<40",
+    age < 70 ~ "2.40-69",
+    TRUE ~ "3.70+"
+  ), 
+  levels = c("1.<40", "2.40-69", "3.70+"),
+  ordered = TRUE
+)]
 
 
 

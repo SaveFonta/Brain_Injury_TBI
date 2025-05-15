@@ -20,11 +20,10 @@ clean_path <- "02_data/02_clean_data/"
 
 poly <- readRDS(paste0(clean_path, "population_poly.rds"))
 
-# Note: now select quick as well!
-
 poly <- poly %>% select(research_case_id, bp, hr, temperature, inr, quick, iss, iss_cat,
-                        invasive, gcs, gcs_cat, sex, age, age_cat, bleeding, fracture,
-                        concussion, brain_edema, brain_compression, unconsciousness)
+                        invasive, gcs, gcs_cat, sex, age, age_cat, age_gen, bleeding, fracture,
+                        concussion, brain_edema, brain_compression, unconsciousness, 
+                        Thorax, severe_thoracic_injury)
 
 # For heart rate and blood pressure must be documentation mistakes (always measured), 
 # so I exclude them in the analysis
@@ -34,12 +33,12 @@ poly <- poly %>% drop_na(bp, hr)
 poly <- poly %>% filter(hr < 250)
 
 
-# CAVEAT: REALIZED THAT THESE ARE NOT FACTORS!
-sapply(poly[, c("bleeding", "fracture", "concussion", "brain_edema", 
-                      "brain_compression", "unconsciousness")], class)
-# NEED TO ENCODE AS SUCH!
-poly <- poly %>% mutate(across(c(bleeding, fracture, concussion, brain_edema, 
-                                 brain_compression, unconsciousness), ~ factor(.)))
+# # CAVEAT: REALIZED THAT THESE ARE NOT FACTORS!
+# sapply(poly[, c("bleeding", "fracture", "concussion", "brain_edema", 
+#                       "brain_compression", "unconsciousness")], class)
+# # NEED TO ENCODE AS SUCH!
+# poly <- poly %>% mutate(across(c(bleeding, fracture, concussion, brain_edema, 
+#                                  brain_compression, unconsciousness), ~ factor(.)))
 
 
 ## ---- NA treatment and inr/quick analysis ----
@@ -340,16 +339,16 @@ par(mfrow=c(1,1))
 
 
 ## ---- Rework Levels ----
-
-# Create a new age variable with only 3 levels
-quick_nona <- quick_nona %>%
-  mutate(age_gen = case_when(
-    age_cat %in% c("1.<30", "2.30-39") ~ "1.<40",
-    age_cat %in% c("3.40-49", "4.50-59", "5.60-69") ~ "2.40-69",
-    age_cat %in% c("6.70-78", "7.79+") ~ "3.70<")) %>%
-  mutate(age_gen = factor(age_gen, 
-                             levels = c("1.<40", "2.40-69", "3.70<"), 
-                             ordered = TRUE))
+ 
+# Create a new age variable with only 3 levels (implemented in data_prep.R)
+# quick_nona <- quick_nona %>%
+#   mutate(age_gen = case_when(
+#     age_cat %in% c("1.<30", "2.30-39") ~ "1.<40",
+#     age_cat %in% c("3.40-49", "4.50-59", "5.60-69") ~ "2.40-69",
+#     age_cat %in% c("6.70-78", "7.79+") ~ "3.70<")) %>%
+#   mutate(age_gen = factor(age_gen, 
+#                              levels = c("1.<40", "2.40-69", "3.70<"), 
+#                              ordered = TRUE))
 
 # Quite balanced
 plot(quick_nona$age_gen)
@@ -408,7 +407,21 @@ ggplot(diagnostics_df, aes(x = leverage, y = std_resid, color = variable)) +
   theme_minimal()
 
 
-
+diagnostics_df <- data.frame(
+  leverage = hatvalues(fm_quick_gen_sq),
+  std_resid = rstandard(fm_quick_gen_sq),
+  variable = quick_nona$Thorax
+)
+ggplot(diagnostics_df, aes(x = leverage, y = std_resid, color = variable)) +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("black", "blue", "green", "red", "brown", "grey")) +
+  labs(
+    title = "Residuals vs Leverage",
+    x = "Leverage",
+    y = "Standardized Residuals",
+    color = "Level"
+  ) +
+  theme_minimal()
 
 
 ## ---- Binary Temp Model ----
@@ -443,14 +456,14 @@ temp_nona <- temp_nona %>%
   mutate(gcs_bin = ifelse(gcs_cat == "0.unknown" | gcs_cat == "1.mild", 0, 1)) %>%
   mutate(gcs_bin = factor(gcs_bin))
 
-temp_nona <- temp_nona %>%
-  mutate(age_gen = case_when(
-    age_cat %in% c("1.<30", "2.30-39") ~ "1.<40",
-    age_cat %in% c("3.40-49", "4.50-59", "5.60-69") ~ "2.40-69",
-    age_cat %in% c("6.70-78", "7.79+") ~ "3.70<")) %>%
-  mutate(age_gen = factor(age_gen, 
-                          levels = c("1.<40", "2.40-69", "3.70<"), 
-                          ordered = TRUE))
+# temp_nona <- temp_nona %>%
+#   mutate(age_gen = case_when(
+#     age_cat %in% c("1.<30", "2.30-39") ~ "1.<40",
+#     age_cat %in% c("3.40-49", "4.50-59", "5.60-69") ~ "2.40-69",
+#     age_cat %in% c("6.70-78", "7.79+") ~ "3.70<")) %>%
+#   mutate(age_gen = factor(age_gen, 
+#                           levels = c("1.<40", "2.40-69", "3.70<"), 
+#                           ordered = TRUE))
 
 
 fm_hypothermia <- glm(hypothermia ~ gcs_bin + iss_cat + invasive + sex + age_gen + 
@@ -473,7 +486,7 @@ resid_dev <- fm_firth$y - fm_firth$predict
 # Calculate fitted values (predicted probabilities)
 fitted_vals <- predict(fm_firth, type = "response")
 
-QQ plot of deviance residuals
+#QQ plot of deviance residuals
 qqnorm(resid_dev, main = "QQ Plot of Deviance Residuals")
 qqline(resid_dev, col = "red")
 
@@ -548,14 +561,38 @@ summary(fm_quick_nona)
 # - 
 
 
-## Quick: Age with only 3 levels and squared quick
-fm_quick_gen_sq <- lm(quick^2 ~ gcs_cat + iss_cat + invasive + sex + age_gen + 
+## Quick: Age with only 3 levels and squared quick; no invasive but Thorax and interaction age/gcs
+fm_quick_gen_sq <- lm(quick^2 ~ gcs_cat + age_gen + iss_cat + severe_thoracic_injury + sex + 
                         bleeding + fracture + concussion + brain_edema + brain_compression +
                         unconsciousness, data = quick_nona)
 par(mfrow=c(2,2))
 plot(fm_quick_gen_sq )
 par(mfrow=c(1,1))
+
+fm_quick_gen_sq_inter1 <- lm(quick^2 ~ gcs_cat * age_gen + iss_cat + severe_thoracic_injury + sex + 
+                        bleeding + fracture + concussion + brain_edema + brain_compression +
+                        unconsciousness, data = quick_nona)
+fm_quick_gen_sq_inter2 <- lm(quick^2 ~ gcs_cat * iss_cat + age_gen + severe_thoracic_injury + sex + 
+                               bleeding + fracture + concussion + brain_edema + brain_compression +
+                               unconsciousness, data = quick_nona)
+fm_quick_gen_sq_inter3 <- lm(quick^2 ~ gcs_cat + age_gen * iss_cat + severe_thoracic_injury + sex + 
+                               bleeding + fracture + concussion + brain_edema + brain_compression +
+                               unconsciousness, data = quick_nona)
+
+
 # here, leverage plot
+
+
+fm_quick_gen_sq_rob <- lmrob(quick^2 ~ gcs_cat * age_gen + iss_cat + severe_thoracic_injury + sex + 
+                        bleeding + fracture + concussion + brain_edema + brain_compression +
+                        unconsciousness, data = quick_nona, fast.s.large.n = Inf)
+
+par(mfrow=c(2,2))
+plot(fm_quick_gen_sq_rob)
+par(mfrow=c(1,1))
+
+summary(fm_quick_gen_sq_rob)
+
 
 summary(fm_quick_gen_sq)
 # here, R squared
@@ -563,7 +600,7 @@ summary(fm_quick_gen_sq)
 plot_model_coefs(fm_quick_gen_sq, "Coefficient Plot: Squared Quick Model w/ Reduced Levels ")
 
 ## Temp:
-fm_temp_nona <- lmrob(temperature ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+fm_temp_nona <- lmrob(temperature ~ gcs_cat * age_cat + iss_cat + severe_thoracic_injury + sex + 
                         bleeding + fracture + concussion + brain_edema + brain_compression +
                         unconsciousness, data = temp_nona, fast.s.large.n = Inf)
 
@@ -578,13 +615,16 @@ plot_model_coefs(fm_temp_nona, "Coefficient Plot: Temperature Model (Robust Regr
 
 
 # standard lm model
-fm_temp_lm <- lm(temperature ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+fm_temp_lm <- lm(temperature ~ gcs_cat * age_cat + iss_cat + severe_thoracic_injury + sex + 
                    bleeding + fracture + concussion + brain_edema + brain_compression +
                    unconsciousness, data = temp_nona)
 par(mfrow=c(2,2))
 plot(fm_temp_lm)
 par(mfrow=c(1,1))
 # here, if lm() or lmrob()
+
+
+
 
 
 # Can I write up the interpretation of these coefficients or are the models too bad to 
@@ -594,10 +634,40 @@ par(mfrow=c(1,1))
 
 
 
-## Note: Add AIS_thorax if save pushes script
+## Note: Add AIS_thorax if save pushes script; 
+# Tell Save that I used gcs_cat / iss_cat and he doesn't need to have gcs and gcs*age separate
+
+# Look at outliers, why are they so dramatic?
+# If they're ok but just more extreme then maybe ok makes sense to use robust regression
 
 
 
+
+
+## Notes from Meeting:
+
+# - R^2 is ok, just low
+# - Robust Regression --> look at residuals: find method to look at NOT weighted residuals to identify outliers
+#   the plots with the weighted outliers should look nice
+# - Compare models with and without interaction --> don't leave away interaction based on summary output
+#   or look at stahel's plot (or interaction plot standard R)
+
+# Can't really conclude sth, but can say e.g. gcs value HELPS predicting
+
+# Could do with random forest for linear to see if we can predict better. If not, than can say that ok making linear
+# assumption with only a few interactions
+
+
+# In report can show lm() but say that we checked for robust regression (or show robreg and tell why: better to use the one 
+# that is same in best case and better in worst case).
+
+
+
+
+# relatively concise report with graphics (not a lot of other summaries than graphics)
+# and rest (such as summary reports) in appendix
+
+# can do same in slides (to have extra slides for details in case of Q)
 
 
 
