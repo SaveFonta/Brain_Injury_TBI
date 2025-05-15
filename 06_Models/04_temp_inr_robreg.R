@@ -354,7 +354,11 @@ quick_nona <- quick_nona %>%
 # Quite balanced
 plot(quick_nona$age_gen)
 
+# here, also gcs_cat possible!
 fm_quick_gen <- lm(quick ~ gcs_bin + iss_cat + invasive + sex + age_gen + 
+                     bleeding + fracture + concussion + brain_edema + brain_compression +
+                     unconsciousness, data = quick_nona)
+fm_quick_gen_sq <- lm(quick^2 ~ gcs_bin + iss_cat + invasive + sex + age_gen + 
                      bleeding + fracture + concussion + brain_edema + brain_compression +
                      unconsciousness, data = quick_nona)
 
@@ -366,8 +370,8 @@ summary(fm_quick_gen)
 
 # Prepare the data
 diagnostics_df <- data.frame(
-  leverage = hatvalues(fm_quick_nona),
-  std_resid = rstandard(fm_quick_nona),
+  leverage = hatvalues(fm_quick_gen_sq),
+  std_resid = rstandard(fm_quick_gen_sq),
   gcs_cat = quick_nona$gcs_cat
 )
 
@@ -388,8 +392,8 @@ ggplot(diagnostics_df, aes(x = leverage, y = std_resid, color = gcs_cat)) +
 
 # Try around with different predictors
 diagnostics_df <- data.frame(
-  leverage = hatvalues(fm_quick_nona),
-  std_resid = rstandard(fm_quick_nona),
+  leverage = hatvalues(fm_quick_gen_sq),
+  std_resid = rstandard(fm_quick_gen_sq),
   variable = quick_nona$iss_cat
 )
 ggplot(diagnostics_df, aes(x = leverage, y = std_resid, color = variable)) +
@@ -402,17 +406,6 @@ ggplot(diagnostics_df, aes(x = leverage, y = std_resid, color = variable)) +
     color = "Level"
   ) +
   theme_minimal()
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -436,39 +429,172 @@ fm_hypothermia <- glm(hypothermia ~ gcs_cat + iss_cat + invasive + sex + age_cat
 library(boot)
 glm.diag.plots(fm_hypothermia)
 
+summary(fm_hypothermia)
+
 "blue"
 # Useless I guess, or I can't interpret my results.
+# I would say model bad due to sparse hypothermia?
 
 
 
 
 
+temp_nona <- temp_nona %>% 
+  mutate(gcs_bin = ifelse(gcs_cat == "0.unknown" | gcs_cat == "1.mild", 0, 1)) %>%
+  mutate(gcs_bin = factor(gcs_bin))
 
-# SAVE'S SUMMARY PLOT!
-
-# ADD AIS THORAX VARIABLE (BINARY SEVERE_THORAX)
-
-# --> Save's going to add it in the dataset I load here (also factor encoding I corrected here)
-# --> check if done tmrw
-
-
-# ASK MÄCHLER IF ROBUST REGRESSION IF DOESN'T CHANGE OR LM()
-
-# MAKE A LIST OF MY QUESTIONS!
-
-
+temp_nona <- temp_nona %>%
+  mutate(age_gen = case_when(
+    age_cat %in% c("1.<30", "2.30-39") ~ "1.<40",
+    age_cat %in% c("3.40-49", "4.50-59", "5.60-69") ~ "2.40-69",
+    age_cat %in% c("6.70-78", "7.79+") ~ "3.70<")) %>%
+  mutate(age_gen = factor(age_gen, 
+                          levels = c("1.<40", "2.40-69", "3.70<"), 
+                          ordered = TRUE))
 
 
+fm_hypothermia <- glm(hypothermia ~ gcs_bin + iss_cat + invasive + sex + age_gen + 
+                        bleeding + fracture + concussion + brain_edema + brain_compression +
+                        unconsciousness, data = temp_nona, family = binomial(link = "logit"))
+
+glm.diag.plots(fm_hypothermia)
+# NOT BETTER
+
+
+# TRY AROUND A BIT
+library(logistf)
+fm_firth <- logistf(hypothermia ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+                      bleeding + fracture + concussion + brain_edema + brain_compression +
+                      unconsciousness, data = temp_nona)
+summary(fm_firth)
+
+# Calculate deviance residuals manually
+resid_dev <- fm_firth$y - fm_firth$predict
+# Calculate fitted values (predicted probabilities)
+fitted_vals <- predict(fm_firth, type = "response")
+
+QQ plot of deviance residuals
+qqnorm(resid_dev, main = "QQ Plot of Deviance Residuals")
+qqline(resid_dev, col = "red")
+
+
+# Get residuals and add to original data
+temp_nona$resid_dev <- residuals(fm_firth, type = "deviance")
+temp_nona$fitted <- predict(fm_firth, type = "response")
+
+# Find observations with extreme residuals
+temp_nona %>%
+  arrange(desc(abs(resid_dev))) %>%
+  head(10)
+
+ggplot(temp_nona, aes(x = fitted, fill = factor(hypothermia))) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 30) +
+  labs(fill = "Hypothermia", x = "Fitted Probability", y = "Count")
 
 
 
 
+## ---- Coef Plot ----
+
+
+library(broom)
+
+# Create a function to plot coefficients from a model
+plot_model_coefs <- function(model, title) {
+  tidy(model, conf.int = TRUE) %>%
+    filter(term != "(Intercept)") %>%
+    mutate(
+      term = reorder(term, estimate),
+      significance = ifelse(p.value < 0.05, "Significant", "Non-significant")
+    ) %>%
+    ggplot(aes(x = estimate, y = term, color = significance)) +
+    geom_point(size = 3) +
+    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+    scale_color_manual(values = c("Significant" = "blue", "Non-significant" = "gray")) +
+    labs(
+      title = title,
+      x = "Estimate (Coefficient ± 95% CI)",
+      y = "Predictor",
+      color = "Significance"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+
+plot_model_coefs(fm_quick_nona, "Coefficient Plot: Quick Model")
+plot_model_coefs(fm_quick_sq, "Coefficient Plot: Squared Quick Model")
+plot_model_coefs(fm_quick_gen, "Coefficient Plot: Quick Model w/ Reduced Levels ")
+plot_model_coefs(fm_quick_gen_sq, "Coefficient Plot: Squared Quick Model w/ Reduced Levels ")
+
+plot_model_coefs(fm_temp_nona, "Coefficient Plot: Temperature Model (Robust Regression)")
+
+
+summary(fm_quick_nona)
 
 
 
+## ---- Meeting ----
+
+# MEETING PREP
+#
+# - Show the leverage plot from temp model with the 4 groups and then the colored one
+#   (or not, maybe not so important)
+#
+# - Suggest the models shown below. Ask him what we should say about it. Are these useful?
+# - Show Diagnostics Plots (to recall) and mention R squared.
+# - If robust regression lmrob() does not yield better results than lm(), what to use?
+# - 
+
+
+## Quick: Age with only 3 levels and squared quick
+fm_quick_gen_sq <- lm(quick^2 ~ gcs_cat + iss_cat + invasive + sex + age_gen + 
+                        bleeding + fracture + concussion + brain_edema + brain_compression +
+                        unconsciousness, data = quick_nona)
+par(mfrow=c(2,2))
+plot(fm_quick_gen_sq )
+par(mfrow=c(1,1))
+# here, leverage plot
+
+summary(fm_quick_gen_sq)
+# here, R squared
+
+plot_model_coefs(fm_quick_gen_sq, "Coefficient Plot: Squared Quick Model w/ Reduced Levels ")
+
+## Temp:
+fm_temp_nona <- lmrob(temperature ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+                        bleeding + fracture + concussion + brain_edema + brain_compression +
+                        unconsciousness, data = temp_nona, fast.s.large.n = Inf)
+
+par(mfrow=c(2,3))
+plot(fm_temp_nona)
+par(mfrow=c(1,1))
+
+summary(fm_temp_nona) 
+# here, R squared
+
+plot_model_coefs(fm_temp_nona, "Coefficient Plot: Temperature Model (Robust Regression)")
+
+
+# standard lm model
+fm_temp_lm <- lm(temperature ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
+                   bleeding + fracture + concussion + brain_edema + brain_compression +
+                   unconsciousness, data = temp_nona)
+par(mfrow=c(2,2))
+plot(fm_temp_lm)
+par(mfrow=c(1,1))
+# here, if lm() or lmrob()
+
+
+# Can I write up the interpretation of these coefficients or are the models too bad to 
+# really infer something?
+
+# Limitations of models based on diagnostics plots and R-Squared?
 
 
 
+## Note: Add AIS_thorax if save pushes script
 
 
 
