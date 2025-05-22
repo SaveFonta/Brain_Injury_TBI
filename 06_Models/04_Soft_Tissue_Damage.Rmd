@@ -1,0 +1,281 @@
+---
+title: "04_Soft_Tissue_Damage"
+author: "Saverio Fontana"
+date: "2025-05-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+
+clean_path <- "02_data/02_clean_data/"
+# for models?
+# model_path <- "05_models/"
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+library(MASS)
+library(data.table)
+library(lme4)      # For mixed effects models
+library(lmerTest)  # For p-values in mixed models
+library(ggplot2)   # For plotting
+library(tidyverse)
+library(car)       # For diagnostic plots
+library(pROC)      # For ROC curves
+library(ordinal)
+
+
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+```
+
+
+
+```{r load_data}
+poly <- readRDS(paste0(clean_path, "population_poly.rds"))
+
+# Distribution of ordered factors
+table(poly$gcs_cat)
+table(poly$iss_cat)
+#very imbalanced
+```
+
+
+
+```{r}
+# Check missing values in key variables
+missing_summary <- sapply(poly, function(x) sum(is.na(x)))
+missing_summary[missing_summary > 0]  # Show only variables with NAs
+```
+
+```{r}
+# Data preparation
+poly <- poly %>%
+  filter(ck <= 90000 | is.na(ck)) # Filter extreme CK values but keep NAs
+poly_ck <- poly %>% drop_na(ck)   
+
+```
+
+First, just a linear model
+```{r}
+model_lm <- lm(ck ~ 
+              gcs_cat + age_gen * iss_cat + severe_thoracic_injury + sex + 
+              bleeding + fracture + concussion + brain_edema + brain_compression +
+              unconsciousness,
+            data = poly_ck)
+
+summary(model_lm)
+plot(model_lm)
+```
+
+
+Inspect using box and cox trasformation
+```{r}
+boxcox(model_lm, lambda = seq(-2, 2, 0.1))
+bc <- boxcox(model_lm, lambda = seq(-2, 2, 0.1), plotit = FALSE)
+optimal_lambda <- bc$x[which.max(bc$y)]
+optimal_lambda
+```
+So we can conclude that the optimal transformation behaves similarly to a log transform but with a slight inverse effect.
+
+I will take the log to ensure interpretability
+
+```{r}
+# Main model specification
+model <- lm(log(ck) ~ 
+              gcs_cat + age_gen * iss_cat + severe_thoracic_injury + sex + 
+              bleeding + fracture + concussion + brain_edema + brain_compression +
+              unconsciousness,
+            data = poly_ck)
+
+# Model summary
+summary(model)
+plot(model)
+```
+
+
+
+```{r}
+# Robust regression using lmrob 
+robust_model <- lmrob(log(ck) ~ 
+                        gcs_cat + iss_cat* age_gen + severe_thoracic_injury + sex + 
+                        bleeding + fracture + concussion + brain_edema + brain_compression +
+                        unconsciousness,
+                      data = poly_ck,
+                      control = lmrob.control(
+                        max.it = 1000,
+                        fast.s.large.n = Inf  # Moved inside control
+                      ))
+
+# Model summary with robust standard errors
+summary(robust_model)
+
+```
+
+
+```{r}
+# Compare with OLS
+tidy_comparison <- bind_rows(
+  OLS = tidy(model, conf.int = TRUE),
+  Robust = tidy(robust_model, conf.int = TRUE),
+  .id = "model_type"
+)
+
+# Coefficient comparison plot
+coef_comparison_plot <- tidy_comparison %>%
+  filter(term != "(Intercept)") %>%
+  mutate(term = fct_reorder(term, estimate)) %>%
+  ggplot(aes(x = estimate, y = term, color = model_type,
+             xmin = conf.low, xmax = conf.high)) +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.5) +
+  geom_pointrange(position = position_dodge(width = 0.5)) +
+  scale_color_manual(values = c("OLS" = "#E69F00", "Robust" = "#0072B2")) +
+  labs(title = "Comparison of OLS and Robust Regression Coefficients",
+       subtitle = "With 95% confidence intervals",
+       x = "Coefficient Estimate",
+       y = "Predictor",
+       color = "Model Type") +
+  theme_minimal()
+
+coef_comparison_plot
+
+```
+
+
+
+```{r}
+# Robust regression diagnostics
+robust_diagnostics <- function(model) {
+  par(mfrow = c(2, 2))
+  plot(model, which = c(1, 2, 3,5))  # Residuals, QQ, Cook's, leverage
+  par(mfrow = c(1, 1))
+}
+
+# Generate diagnostic plots
+robust_diagnostics(robust_model)
+```
+
+
+```{r}
+# Prepare a data frame
+df <- data.frame(
+  Residuals = residuals(robust_model),
+  Weights = weights(robust_model, type = "robustness")
+)
+
+# Create ggplot visualization of weights
+ggplot(df, aes(x = Weights, y = Residuals)) +
+  geom_point(aes(color = Weights), size = 2, alpha = 0.7, show.legend = FALSE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  scale_color_viridis_c(option = "plasma", end = 0.85) +
+  labs(
+    title = "Creatine Kinase (ck): Residuals vs Weights",
+    x = "Robustness Weights",
+    y = "Residuals"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold")
+  )
+```
+
+
+
+
+Random forest comparison
+
+```{r}
+
+library(randomForest)
+rf <- randomForest(ck ~ gcs_cat + age_gen * iss_cat + severe_thoracic_injury + sex + 
+                           bleeding + fracture + concussion + brain_edema + brain_compression +
+                           unconsciousness, data = poly_ck, importance = TRUE)
+
+rf$importance
+
+```
+
+
+
+
+
+
+
+Levy's plot
+
+```{r}
+library(lemon)
+library(forcats)
+#Levy's plot 
+coefficient_plot <- function(model, outcome_name, plot_color = "darkblue", alpha = .05, x_breaks,
+                             coef_names = data.frame(
+                               variable = c("gcs_cat.L", "gcs_cat.Q", "gcs_cat.C", "concussion1",
+                                            "bleeding1", "fracture1", "brain_edema1",
+                                            "brain_compression1", "severebrain1",
+                                            "unconsciousness1", "invasive1",
+                                            "iss_cat.L", "iss_cat.Q", "iss_cat.C",
+                                            "severe_thoracic_injury1",
+                                            "age_gen.L", "age_gen.Q",
+                                            "sexm"),
+                               variable_nice = c("GCS category, linear", "GCS category, quadratic",
+                                                 "GCS category, cubic", "Concussion", "Intracranial bleeding",
+                                                 "Skull fracture", "Brain Edema", "Brain Compression",
+                                                 "Severe brain injury",
+                                                 "Loss of consciousness", "Invasive procedure",
+                                                 "ISS category, linear", "ISS category, quadratic",
+                                                 "ISS category, cubic",
+                                                 "Severe thoracic injury",
+                                                 "Age category, linear", "Age category, quadratic",
+                                                 "Male sex"))) {
+  #' @param model The model fitted with lm() or lmrob().
+  #' @param outcome_name The name of the outcome variable for the plot title.
+  #' @param plot_color The color of the points and confidence intervals.
+  #' @param alpha The significance level for the confidence intervals.
+  #' @param x_breaks The breaks for the x-axis.
+  #' @param coef_names A data frame with the variable names and their nice names.
+  #' @return A ggplot object with the coefficient estimates and confidence intervals.
+  
+  # make nice names for interaction terms
+  interaction_names <- names(model$coefficients)
+  interaction_names <- interaction_names[grepl(pattern = ":", x = interaction_names)]
+  coef_names <- rbind(coef_names,
+                      data.frame(variable = interaction_names,
+                                 variable_nice = interaction_names |> 
+                                   str_replace_all(c(gcs_cat = "GCS category", 
+                                                     iss_cat = "ISS category",
+                                                     age_gen = "Age category",
+                                                     `\\.L` = ", linear", 
+                                                     `\\.Q` = ", quadratic",
+                                                     `\\.C` = ", cubic",
+                                                     `:` = " x "))))
+  
+  model_coefs <- summary(model)$coefficients |> 
+    data.frame(check.names = FALSE) |> 
+    rownames_to_column(var = "variable") |> 
+    filter(variable != "(Intercept)") |> 
+    left_join(coef_names, by = "variable") |> 
+    mutate(cil = Estimate - qt(p = alpha / 2, df = model$df.residual) * `Std. Error`,
+           ciu = Estimate + qt(p = alpha / 2, df = model$df.residual) * `Std. Error`,
+           variable_nice = factor(variable_nice, levels = coef_names$variable_nice))
+  
+  model_coefs |> 
+    ggplot(aes(x = Estimate, y = fct_rev(variable_nice))) +
+    geom_vline(xintercept = 0, color = "black") +
+    geom_point(color = plot_color) +
+    geom_errorbarh(aes(xmin = cil, xmax = ciu), height = 0,
+                   color = plot_color) +
+    theme_classic() +
+    scale_x_continuous(breaks = x_breaks, limits = range(x_breaks)) +
+    labs(x = "Coefficient Estimate (95% Confidence Interval)",
+         y = NULL, title = paste0("Model Coefficients: ", outcome_name)) +
+    coord_capped_cart(bottom = "both") +
+    theme(axis.line.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.text = element_text(color = "black"),
+          panel.grid.major.x = element_line(color = "gray"))
+}
+
+summary(coefficients(robust_model))
+coefficient_plot(model = robust_model, outcome_name = "log(ck)", x_breaks = c(-1, 1))
+
+```
+
