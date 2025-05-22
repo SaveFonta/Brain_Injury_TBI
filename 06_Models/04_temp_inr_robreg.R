@@ -44,26 +44,26 @@ poly <- poly %>% filter(hr < 250)
 ## ---- NA treatment and inr/quick analysis ----
 
 # RECALL: inr has a very weird distribution that we can't just plug in a model
-boxplot(poly$inr)
+boxplot(poly$inr, main = "INR Distribution")
 # Even taking logs is not enough
-boxplot(log(poly$inr))
+boxplot(log(poly$inr), main = "log(INR) Distribution")
 
 # Discussed approach: Take some stronger trafo, e.g. 1/inr (box-cox w/ lambda = -1)
 # or even 1/inr^2 (boxcox w/ lambda = -2). But then idea: Why use such a trafo of inr
 # if we have quick, that is defined as 100/(2*INR - 1)?!
-hist(poly$inr)
-hist(poly$quick)
-# Indeed, quick looks a lot better. Still a bit right skewed, but ok.
+hist(poly$inr, main = "Histogram of INR", xlab = "INR value")
+hist(poly$quick, main = "Histogram of Quick", xlab = "Quick value")
+# Indeed, quick looks a lot better". Still a bit right skewed, but ok.
 # Just a quick check if quick is reliably calculated like this
 
 test <- poly %>%
   mutate(quicktest = 100 / (2*inr - 1)) %>%
   select(inr, quick, quicktest)
 
-boxplot(test$quick)
+boxplot(test$quick, main = "Quick Distribution")
 boxplot(test$quicktest)
 # If not enough, might try squared
-boxplot(poly$quick^2)
+boxplot(poly$quick^2, main = "Quick^2 Distribution")
 
 # Unfortunately, the quick values in our dataset are not exactly the same as the ones
 # calculated with the formula. They are, however, some kind of inverse. I will have a
@@ -168,16 +168,16 @@ par(mfrow=c(1,1))
 
 # RECALL:
 hist(temp_nona$temperature)
-boxplot(temp_nona$temperature)
+boxplot(temp_nona$temperature, main = "Temperature Distribution")
 
 # As advised by Prof. Mächler, we'll try a robust regression with lmrob()
 library(robustbase)
 fm_temp_nona <- lmrob(temperature ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
                       bleeding + fracture + concussion + brain_edema + brain_compression +
-                      unconsciousness, data = temp_nona, fast.s.large.n = Inf)
+                      unconsciousness, data = temp_nona, fast.s.large.n = Inf, setting = "KS2014")
 # fm_temp_impna <- lmrob(temperature ~ gcs_cat + iss_cat + invasive + sex + age_cat + 
 #                        bleeding + fracture + concussion + brain_edema + brain_compression +
-#                        unconsciousness, data = temp_impna, fast.s.large.n = Inf)
+#                        unconsciousness, data = temp_impna, fast.s.large.n = Inf, setting = "KS2014")
 summary(fm_temp_nona)
 # summary(fm_temp_impna) # Some differences visible, not too much tho
 
@@ -548,20 +548,11 @@ summary(fm_quick_nona)
 
 
 
-## ---- Meeting ----
-
-# MEETING PREP
-#
-# - Show the leverage plot from temp model with the 4 groups and then the colored one
-#   (or not, maybe not so important)
-#
-# - Suggest the models shown below. Ask him what we should say about it. Are these useful?
-# - Show Diagnostics Plots (to recall) and mention R squared.
-# - If robust regression lmrob() does not yield better results than lm(), what to use?
-# - 
+## ---- Final Models ----
 
 
-## Quick: Age with only 3 levels and squared quick; no invasive but Thorax and interaction age/gcs
+
+## Quick: Age with only 3 levels and squared quick; no invasive but Thorax and interactions
 fm_quick_gen_sq <- lm(quick^2 ~ gcs_cat + age_gen + iss_cat + severe_thoracic_injury + sex + 
                         bleeding + fracture + concussion + brain_edema + brain_compression +
                         unconsciousness, data = quick_nona)
@@ -578,70 +569,212 @@ fm_quick_gen_sq_inter2 <- lm(quick^2 ~ gcs_cat * iss_cat + age_gen + severe_thor
 fm_quick_gen_sq_inter3 <- lm(quick^2 ~ gcs_cat + age_gen * iss_cat + severe_thoracic_injury + sex + 
                                bleeding + fracture + concussion + brain_edema + brain_compression +
                                unconsciousness, data = quick_nona)
+anova(fm_quick_gen_sq, fm_quick_gen_sq_inter1) # no inter1!
+anova(fm_quick_gen_sq, fm_quick_gen_sq_inter2) # no inter2!
+anova(fm_quick_gen_sq, fm_quick_gen_sq_inter3)
+# Ok, use inter3 model!
 
 
-# here, leverage plot
-
-
-fm_quick_gen_sq_rob <- lmrob(quick^2 ~ gcs_cat * age_gen + iss_cat + severe_thoracic_injury + sex + 
+fm_quick_gen_sq_rob <- lmrob(quick^2 ~ gcs_cat + age_gen * iss_cat + severe_thoracic_injury + sex + 
                         bleeding + fracture + concussion + brain_edema + brain_compression +
-                        unconsciousness, data = quick_nona, fast.s.large.n = Inf)
+                        unconsciousness, data = quick_nona, fast.s.large.n = Inf, setting = "KS2014")
 
 par(mfrow=c(2,2))
 plot(fm_quick_gen_sq_rob)
 par(mfrow=c(1,1))
 
 summary(fm_quick_gen_sq_rob)
+# Ok, use the lm!
+summary(fm_quick_gen_sq_inter3)
+
+plot_model_coefs(fm_quick_gen_sq_inter3, "Coefficient Plot: Squared Quick Model w/ Reduced Levels ")
 
 
-summary(fm_quick_gen_sq)
-# here, R squared
 
-plot_model_coefs(fm_quick_gen_sq, "Coefficient Plot: Squared Quick Model w/ Reduced Levels ")
 
 ## Temp:
-fm_temp_nona <- lmrob(temperature ~ gcs_cat * age_cat + iss_cat + severe_thoracic_injury + sex + 
+fm_temp_nona <- lmrob(temperature ~ gcs_cat + age_gen + iss_cat + severe_thoracic_injury + sex + 
                         bleeding + fracture + concussion + brain_edema + brain_compression +
-                        unconsciousness, data = temp_nona, fast.s.large.n = Inf)
-
+                        unconsciousness, data = temp_nona, fast.s.large.n = Inf, setting = "KS2014")
 par(mfrow=c(2,3))
 plot(fm_temp_nona)
 par(mfrow=c(1,1))
 
-summary(fm_temp_nona) 
-# here, R squared
+fm_temp_nona_inter1 <- lmrob(temperature ~ gcs_cat * age_gen + iss_cat + severe_thoracic_injury + sex + 
+                             bleeding + fracture + concussion + brain_edema + brain_compression +
+                             unconsciousness, data = temp_nona, fast.s.large.n = Inf, setting = "KS2014")
+fm_temp_nona_inter2 <- lmrob(temperature ~ gcs_cat * iss_cat + age_gen + severe_thoracic_injury + sex + 
+                             bleeding + fracture + concussion + brain_edema + brain_compression +
+                             unconsciousness, data = temp_nona, fast.s.large.n = Inf, setting = "KS2014")
+fm_temp_nona_inter3 <- lmrob(temperature ~ gcs_cat + age_gen * iss_cat + severe_thoracic_injury + sex + 
+                             bleeding + fracture + concussion + brain_edema + brain_compression +
+                             unconsciousness, data = temp_nona, fast.s.large.n = Inf, setting = "KS2014")
+anova(fm_temp_nona, fm_temp_nona_inter1) # significant
+anova(fm_temp_nona, fm_temp_nona_inter2) # significant
+anova(fm_temp_nona, fm_temp_nona_inter3)
+fm_temp_nona_inter4 <- lmrob(temperature ~ gcs_cat * iss_cat + gcs_cat:age_gen + age_gen + severe_thoracic_injury + sex + 
+                               bleeding + fracture + concussion + brain_edema + brain_compression +
+                               unconsciousness, data = temp_nona, fast.s.large.n = Inf, setting = "KS2014")
+anova(fm_temp_nona, fm_temp_nona_inter4)
+# Use both interaction terms!
+par(mfrow=c(2,3))
+plot(fm_temp_nona_inter4)
+par(mfrow=c(1,1))
+
+
+# Plot Fitted Values against Response
+plot(fm_temp_nona, which = 3, main = "Temperature Model")
+
+# Plot robreg residuals ws weights
+plot(residuals(fm_temp_nona) ~ weights(fm_temp_nona, type="robustness"), 
+     main = "Temperature Robust Regression: Residuals vs Weights",
+     xlab = "Robustness Weights", ylab = "Residuals") ##-> weights.lmrob()
+abline(h=0, lty=3)
+## OR, alternatively: Prepare a data frame
+df <- data.frame(
+  Residuals = residuals(fm_temp_nona),
+  Weights = weights(fm_temp_nona, type = "robustness")
+)
+# Create ggplot without legend
+ggplot(df, aes(x = Weights, y = Residuals)) +
+  geom_point(aes(color = Weights), size = 2, alpha = 0.7, show.legend = FALSE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  scale_color_viridis_c(option = "plasma", end = 0.85) +
+  labs(
+    title = "Temperature: Residuals vs Weights",
+    x = "Robustness Weights",
+    y = "Residuals"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold")
+  )
+
 
 plot_model_coefs(fm_temp_nona, "Coefficient Plot: Temperature Model (Robust Regression)")
 
+summary(fm_temp_nona) 
+# --> 17 extreme outliers --> Use lmrob
 
-# standard lm model
-fm_temp_lm <- lm(temperature ~ gcs_cat * age_cat + iss_cat + severe_thoracic_injury + sex + 
-                   bleeding + fracture + concussion + brain_edema + brain_compression +
-                   unconsciousness, data = temp_nona)
-par(mfrow=c(2,2))
-plot(fm_temp_lm)
-par(mfrow=c(1,1))
-# here, if lm() or lmrob()
-
-
+temp_outliers = temp_nona[c(1537,1745,1831,1932,2180,2367,2514,3181,3223,3783,4149,4210,4595,4921,5104,5119,5141),]
+hist(temp_outliers$temperature, main = "Histogram of Temperature Outliers", xlab = "Temperature")
+# Add vertical dashed red lines for the healthy range
+abline(v = 35.2, col = "red", lty = 2, lwd = 2)
+abline(v = 38, col = "red", lty = 2, lwd = 2)
+# Range of possible values, can't say that they're mistakes or so, leave them in!
 
 
 
-# Can I write up the interpretation of these coefficients or are the models too bad to 
-# really infer something?
-
-# Limitations of models based on diagnostics plots and R-Squared?
 
 
+### Try Random Forest (to see if R^2 better) -----
 
-## Note: Add AIS_thorax if save pushes script; 
-# Tell Save that I used gcs_cat / iss_cat and he doesn't need to have gcs and gcs*age separate
+library(randomForest)
+rf_quick <- randomForest(quick^2 ~ gcs_cat + age_gen * iss_cat + severe_thoracic_injury + sex + 
+                         bleeding + fracture + concussion + brain_edema + brain_compression +
+                         unconsciousness, data = quick_nona, importance = TRUE)
+print(rf_quick)
 
-# Look at outliers, why are they so dramatic?
-# If they're ok but just more extreme then maybe ok makes sense to use robust regression
+rf_temp <- randomForest(temperature ~ gcs_cat + age_gen + iss_cat + severe_thoracic_injury + sex + 
+                        bleeding + fracture + concussion + brain_edema + brain_compression +
+                        unconsciousness, data = temp_nona, importance = TRUE)
+
+print(rf_temp)
+
+
+### Coefficient Plots FINAL and Robust Comparison Plots ----
+
+# THESE ARE THE FINAL TWO MODELS!
+fm_quick_gen_sq_inter3 <- lm(quick^2 ~ gcs_cat + age_gen * iss_cat + severe_thoracic_injury + sex + 
+                               bleeding + fracture + concussion + brain_edema + brain_compression +
+                               unconsciousness, data = quick_nona)
+
+fm_temp_nona_inter4 <- lmrob(temperature ~ gcs_cat * iss_cat + gcs_cat:age_gen + age_gen + severe_thoracic_injury + sex + 
+                               bleeding + fracture + concussion + brain_edema + brain_compression +
+                               unconsciousness, data = temp_nona, fast.s.large.n = Inf, setting = "KS2014")
+summary(fm_temp_nona_inter4)
+
+library(lemon)
+coefficient_plot <- function(model, outcome_name, plot_color = "darkblue", alpha = .05, x_breaks,
+                             coef_names = data.frame(
+                               variable = c("gcs_cat.L", "gcs_cat.Q", "gcs_cat.C", "concussion1",
+                                            "bleeding1", "fracture1", "brain_edema1",
+                                            "brain_compression1", "severebrain1",
+                                            "unconsciousness1", "invasive1",
+                                            "iss_cat.L", "iss_cat.Q", "iss_cat.C",
+                                            "severe_thoracic_injury1",
+                                            "age_gen.L", "age_gen.Q",
+                                            "sexm"),
+                               variable_nice = c("GCS category, linear", "GCS category, quadratic",
+                                                 "GCS category, cubic", "Concussion", "Intracranial bleeding",
+                                                 "Skull fracture", "Brain Edema", "Brain Compression",
+                                                 "Severe brain injury",
+                                                 "Loss of consciousness", "Invasive procedure",
+                                                 "ISS category, linear", "ISS category, quadratic",
+                                                 "ISS category, cubic",
+                                                 "Severe thoracic injury",
+                                                 "Age category, linear", "Age category, quadratic",
+                                                 "Male sex"))) {
+  #' @param model The model fitted with lm() or lmrob().
+  #' @param outcome_name The name of the outcome variable for the plot title.
+  #' @param plot_color The color of the points and confidence intervals.
+  #' @param alpha The significance level for the confidence intervals.
+  #' @param x_breaks The breaks for the x-axis.
+  #' @param coef_names A data frame with the variable names and their nice names.
+  #' @return A ggplot object with the coefficient estimates and confidence intervals.
+  
+  # make nice names for interaction terms
+  interaction_names <- names(model$coefficients)
+  interaction_names <- interaction_names[grepl(pattern = ":", x = interaction_names)]
+  coef_names <- rbind(coef_names,
+                      data.frame(variable = interaction_names,
+                                 variable_nice = interaction_names |> 
+                                   str_replace_all(c(gcs_cat = "GCS category", 
+                                                     iss_cat = "ISS category",
+                                                     age_gen = "Age category",
+                                                     `\\.L` = ", linear", 
+                                                     `\\.Q` = ", quadratic",
+                                                     `\\.C` = ", cubic",
+                                                     `:` = " x "))))
+  
+  model_coefs <- summary(model)$coefficients |> 
+    data.frame(check.names = FALSE) |> 
+    rownames_to_column(var = "variable") |> 
+    filter(variable != "(Intercept)") |> 
+    left_join(coef_names, by = "variable") |> 
+    mutate(cil = Estimate - qt(p = alpha / 2, df = model$df.residual) * `Std. Error`,
+           ciu = Estimate + qt(p = alpha / 2, df = model$df.residual) * `Std. Error`,
+           variable_nice = factor(variable_nice, levels = coef_names$variable_nice))
+  
+  model_coefs |> 
+    ggplot(aes(x = Estimate, y = fct_rev(variable_nice))) +
+    geom_vline(xintercept = 0, color = "black") +
+    geom_point(color = plot_color) +
+    geom_errorbarh(aes(xmin = cil, xmax = ciu), height = 0,
+                   color = plot_color) +
+    theme_classic() +
+    scale_x_continuous(breaks = x_breaks, limits = range(x_breaks)) +
+    labs(x = "Coefficient Estimate (95% Confidence Interval)",
+         y = NULL, title = paste0("Model Coefficients: ", outcome_name)) +
+    coord_capped_cart(bottom = "both") +
+    theme(axis.line.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.text = element_text(color = "black"),
+          panel.grid.major.x = element_line(color = "gray"))
+}
+
+summary(coefficients(fm_quick_gen_sq_inter3))
+coefficient_plot(model = fm_quick_gen_sq_inter3, outcome_name = "Quick^2", x_breaks = c(-3500, 3500))
+coefficient_plot(model = fm_quick_gen_sq_inter3, outcome_name = "Quick^2", x_breaks = c(-3500, 2000))
+
+summary(coefficients(fm_temp_nona_inter4))
+coefficient_plot(model = fm_temp_nona_inter4, outcome_name = "Temperature", x_breaks = c(-0.65, 0.65))
+coefficient_plot(model = fm_temp_nona_inter4, outcome_name = "Temperature", x_breaks = c(-0.65, 0.3))
 
 
 
+
+### Notes -----
 
 
 ## Notes from Meeting:
@@ -660,8 +793,6 @@ par(mfrow=c(1,1))
 
 # In report can show lm() but say that we checked for robust regression (or show robreg and tell why: better to use the one 
 # that is same in best case and better in worst case).
-
-
 
 
 # relatively concise report with graphics (not a lot of other summaries than graphics)
