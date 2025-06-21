@@ -1,0 +1,386 @@
+---
+title: "Initial Explorations and Alternative Models: Circulation, Temperature, and INR"
+output: html_document
+date: "2025-04-15"
+author: "vjohner"
+---
+
+```{r setup, include=FALSE}
+# This R Markdown document outlines the initial exploratory steps and alternative
+# modeling approaches considered during the "Traumatic Brain Injury in Polytrauma"
+# project. It serves as supplementary documentation to the main report,
+# explaining the rationale behind early decisions and why certain methods
+# were ultimately not pursued for the final analysis.
+
+rm(list = ls()) # Clear environment to ensure a clean run
+
+# Define paths
+clean_path <- "02_data/02_clean_data/"
+
+# Load necessary libraries for initial exploration
+# Note: MASS is loaded before tidyverse to avoid masking select()
+library(data.table)
+library(lme4)      # For mixed effects models (initial approach for BP/HR)
+library(lmerTest)  # For p-values in mixed models
+library(ggplot2)   # For plotting
+library(tidyverse) # For data manipulation
+library(car)       # For diagnostic plots (e.g., qqPlot, boxcox)
+library(pROC)      # For ROC curves (used in binary outcome exploration)
+library(robustbase) # For lmrob() (used in later stages, but included here for completeness of exploration)
+library(logistf)   # For Firth's logistic regression (explored for sparse binary outcomes)
+
+# Set root directory for knitr to ensure correct file paths
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+
+# Global chunk options for consistent output
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## 1. Data Loading and Initial Preparation
+
+This section loads the raw polytrauma dataset and performs initial cleaning steps common to all subsequent analyses.
+
+```{r load_data, echo=TRUE}
+# Load the pre-processed polytrauma population data
+# This dataset contains various patient and injury characteristics.
+poly <- readRDS(paste0(clean_path, "population_poly.rds"))
+
+# Select relevant variables for these initial models.
+# Note: 'age_gen', 'gcs_cat', 'iss_cat' are already ordered factors from data_prep.R.
+# Binary injury indicators (bleeding, fracture, etc.) are also factors.
+poly <- poly %>%
+  select(research_case_id, bp, hr, temperature, inr, iss, iss_cat,
+         invasive, gcs, gcs_cat, sex, age, age_cat, age_gen, bleeding, fracture,
+         concussion, brain_edema, brain_compression, unconsciousness,
+         Thorax, severe_thoracic_injury) # Added Thorax and severe_thoracic_injury for completeness
+
+# Initial data cleaning for vital signs:
+# Blood Pressure (bp) and Heart Rate (hr) are expected to be consistently measured.
+# Missing values are likely documentation errors and are removed for these variables.
+poly <- poly %>% drop_na(bp, hr)
+
+# Remove extreme outlier for Heart Rate (HR > 250 bpm is physiologically unlikely).
+poly <- poly %>% filter(hr < 250)
+
+# Create a long-format dataset for Blood Pressure (bp) and Heart Rate (hr).
+# This was prepared for an initial multivariate mixed-effects modeling approach
+# where both vital signs would be modeled simultaneously.
+poly_hemo <- melt(poly,
+                  id.vars = c("research_case_id", "gcs_cat", "iss_cat", "invasive",
+                              "sex", "age_cat", "age_gen", "bleeding", "fracture", "concussion",
+                              "brain_edema", "brain_compression", "unconsciousness",
+                              "severe_thoracic_injury"), # Added severe_thoracic_injury
+                  measure.vars = c("bp", "hr"),
+                  variable.name = "vital_sign",
+                  value.name = "value")
+
+# Create a combined GCS and vital sign variable for potential interactions in the mixed model.
+poly_hemo[, gcs_vital := paste(gcs_cat, vital_sign, sep = "_")]
+```
+
+## 2. Exploratory Data Analysis (EDA)
+
+This section provides initial insights into the data distributions and relationships, guiding subsequent modeling decisions.
+
+```{r explore_data, echo=TRUE, fig.height=6, fig.width=10}
+# Distribution of ordered factors
+cat("GCS Category Distribution:\n")
+print(table(poly$gcs_cat))
+cat("\nISS Category Distribution:\n")
+print(table(poly$iss_cat))
+cat("\nAge Category Distribution:\n")
+print(table(poly$age_cat)) # Original age categories
+cat("\nGeneralized Age Category Distribution:\n")
+print(table(poly$age_gen)) # Reduced age categories
+
+# Summary statistics of key outcome variables
+cat("\nSummary Statistics for Key Outcome Variables:\n")
+print(summary(poly[,.(bp, hr, temperature, inr)]))
+
+# Check missing values in key outcome variables
+cat("\nMissing Values in Key Outcome Variables:\n")
+missing_values <- colSums(is.na(poly %>% select(bp, hr, temperature, inr)))
+print(missing_values)
+# Note: Missingness for temperature and inr/quick was often informative (test not performed).
+
+# Distribution of key outcome variables (histograms)
+par(mfrow=c(2,2))
+hist(poly$bp, main="Blood Pressure Distribution", xlab="BP")
+hist(poly$hr, main="Heart Rate Distribution", xlab="HR")
+hist(poly$temperature, main="Temperature Distribution", xlab="Temperature")
+hist(poly$inr, main="INR Distribution", xlab="INR")
+par(mfrow=c(1,1))
+# Observation: INR distribution is highly skewed, suggesting transformation or alternative.
+
+# Examine relationships between ordered factors and outcomes (boxplots)
+par(mfrow=c(2,2))
+boxplot(bp ~ gcs_cat, data = poly, main = "Blood Pressure by GCS Category", xlab = "GCS Category", ylab = "BP")
+boxplot(hr ~ gcs_cat, data = poly, main = "Heart Rate by GCS Category", xlab = "GCS Category", ylab = "HR")
+boxplot(temperature ~ gcs_cat, data = poly, main = "Temperature by GCS Category", xlab = "GCS Category", ylab = "Temperature")
+boxplot(inr ~ gcs_cat, data = poly, main = "INR by GCS Category", xlab = "GCS Category", ylab = "INR")
+par(mfrow=c(1,1))
+# Observation: INR shows extreme outliers, making direct modeling challenging.
+```
+
+## 3. Initial Modeling Approaches (Not Used in Final Report)
+
+This section documents the initial modeling strategies explored for Blood Pressure, Heart Rate, Temperature, and INR. These approaches were later refined or replaced due to diagnostic issues, interpretability challenges, or better alternatives being identified.
+
+### 3.1 Model 1: Blood Pressure and Heart Rate (Multivariate Mixed-Effects)
+
+This was an initial attempt to model both Blood Pressure and Heart Rate simultaneously using a mixed-effects model, accounting for within-patient correlation.
+
+```{r model_1_hemo, echo=TRUE}
+# Model 1: Mixed-effects model for combined BP and HR
+# 'research_case_id' is included as a random effect to account for repeated measures
+# (BP and HR for the same patient).
+model1 <- lmer(value ~ vital_sign * gcs_cat + iss_cat + invasive + sex + age_cat +
+               bleeding + fracture + concussion + brain_edema + brain_compression +
+               unconsciousness + (1|research_case_id), data = poly_hemo)
+
+# Alternative model with vital_sign * sex interaction
+model1_sex <- lmer(value ~ vital_sign * gcs_cat + vital_sign * sex + iss_cat + invasive +
+                   age_cat + bleeding + fracture + concussion + brain_edema +
+                   brain_compression + unconsciousness + (1|research_case_id),
+                   data = poly_hemo)
+
+# Model summaries
+cat("Summary for Model 1 (BP and HR combined):\n")
+summary(model1)
+cat("\nSummary for Model 1 with Sex Interaction:\n")
+summary(model1_sex)
+
+# Compare models using ANOVA
+cat("\nANOVA comparison of Model 1 and Model 1 with Sex Interaction:\n")
+anova(model1, model1_sex)
+```
+
+**Interpretation and Rationale for Not Pursuing:**
+In `model1_sex`, the interaction `vital_signhr:sexm` and the main effect `sexm` were not significant, and the model had a higher AIC. Therefore, `model1` (without the sex interaction) was preferred.
+
+For `model1`:
+*   `vital_signhr` (significant negative): Indicates that, on average, Heart Rate values are lower than Blood Pressure values (as expected, given their different scales).
+*   `vital_signhr:gcs_cat.L` (significant positive): This interaction term suggests that the linear effect of GCS category on Heart Rate (compared to Blood Pressure) increases across GCS levels.
+*   `gcs_cat.L` (significant negative): The linear contrast for GCS category indicates that as GCS severity increases (moving from "0.unknown" towards "3.severe"), the combined outcome (BP or HR) tends to decrease.
+*   `gcs_cat.Q` (significant negative): The quadratic contrast suggests a non-linear curve in this relationship.
+*   `unconsciousness` (significant negative): Associated with lower combined BP/HR values.
+*   `age_cat.L` (significant positive): As age increases, the combined outcome tends to increase.
+
+**Reason for not using this approach in the final report:** While this mixed-effects model provided a combined view, interpreting the interactions between `vital_sign` and other predictors (especially with ordered factors like `gcs_cat`) proved complex for clear clinical communication. Furthermore, the goal shifted towards understanding each physiological outcome individually with more tailored transformations and robust methods, which ultimately offered more detailed and interpretable insights for the client. The suggestion to fit individual models was adopted.
+
+#### 3.1.1 Diagnostics for Model 1
+
+```{r model_1_hemo_diag, echo=TRUE, fig.height=6, fig.width=10}
+# Standard diagnostic plots for mixed-effects models
+par(mfrow=c(2,2))
+plot(model1) # Visual inspection of residuals vs. fitted, QQ plot, etc.
+par(mfrow=c(1,1))
+
+# Q-Q Plot of residuals to check for normality
+qqnorm(resid(model1), main="Q-Q Plot of Residuals (Model 1)")
+qqline(resid(model1))
+
+# Half-normal plot of residuals (using car package for approximation)
+car::qqPlot(resid(model1), distribution="norm", envelope=0.95,
+             main="Half-Normal Plot of Residuals (Model 1)", ylab="Residuals")
+
+# Predictions and observed vs. predicted plot
+poly_hemo$predicted <- predict(model1, newdata = poly_hemo, allow.new.levels = TRUE, re.form = NULL) # Include random effects
+ggplot(poly_hemo, aes(x=value, y=predicted)) +
+  geom_point(alpha=0.5) +
+  geom_abline(intercept=0, slope=1, color="red") +
+  facet_wrap(~vital_sign, scales="fixed") +
+  labs(title="Predicted vs Observed Values (Model 1)", x="Observed", y="Predicted") +
+  theme_minimal()
+
+# Examine interaction effects with ordered factors visually
+ggplot(poly_hemo, aes(x=gcs_cat, y=value, fill=vital_sign)) +
+  geom_boxplot() +
+  facet_wrap(~vital_sign, scales="free_y") +
+  labs(title="BP and HR by GCS Category (Model 1)", x="GCS Category", y="Value") +
+  theme_minimal()
+```
+**Observation:** The Q-Q plot suggests some skewness in the residuals. This led to exploring a log transformation.
+
+#### 3.1.2 Model 1 with Log Transformation
+
+```{r model_1_hemo_log, echo=TRUE, fig.height=6, fig.width=10}
+# Attempting a log transformation to address skewness in residuals
+# A small constant (0.0001) is added to handle zero values before log transformation.
+model1_log <- lmer(log(value + 0.0001) ~ vital_sign * gcs_cat + iss_cat + invasive + sex +
+                   age_cat + bleeding + fracture + concussion + brain_edema +
+                   brain_compression + unconsciousness + (1|research_case_id),
+                   data = poly_hemo)
+
+cat("Summary for Model 1 with Log Transformation:\n")
+summary(model1_log)
+
+cat("\nANOVA comparison of Model 1 and Log-transformed Model 1:\n")
+anova(model1, model1_log) # Compare models
+
+# Diagnostics for log-transformed model
+par(mfrow=c(2,2))
+plot(model1_log)
+par(mfrow=c(1,1))
+
+qqnorm(resid(model1_log), main="Q-Q Plot of Residuals (Log-transformed Model 1)")
+qqline(resid(model1_log))
+
+# Half-normal plot of residuals (approximation using car package)
+car::qqPlot(resid(model1_log), distribution="norm", envelope=0.95,
+             main="Half-Normal Plot of Residuals (Log-transformed Model 1)", ylab="Residuals")
+
+# Predictions (back-transformed for interpretability)
+poly_hemo$predicted_log <- predict(model1_log, newdata = poly_hemo, allow.new.levels = TRUE, re.form = NULL)
+poly_hemo$predicted_log_trafo <- exp(poly_hemo$predicted_log) - 0.0001
+
+ggplot(poly_hemo, aes(x=value, y=predicted_log_trafo)) +
+  geom_point(alpha=0.5) +
+  geom_abline(intercept=0, slope=1, color="red") +
+  facet_wrap(~vital_sign, scales="fixed") +
+  labs(title="Predicted vs Observed Values (Log-transformed Model 1)", x="Observed", y="Predicted") +
+  theme_minimal()
+```
+**Changes in interpretation with log transformation:**
+*   Sex and unconsciousness effects became non-significant.
+*   ISS (both linear and quadratic terms) became highly significant and negative, which is more aligned with clinical expectations for severe trauma.
+
+**Reason for not using this approach in the final report:** While the log transformation improved the Q-Q plot and predictions, the overall complexity of the multivariate mixed-effects model and its interpretation remained a challenge. The decision was made to move to individual linear models for each outcome, allowing for more tailored transformations and simpler interpretation of coefficients.
+
+### 3.2 Model 2: Temperature as Outcome (Initial Linear Model)
+
+This was an initial attempt to model Temperature using a standard linear model (`lm`).
+
+```{r model_2_temp, echo=TRUE, fig.height=6, fig.width=10}
+# Drop NAs for temperature for this specific model
+poly_temp <- poly %>% drop_na(temperature)
+
+# Q-Q Plot for raw Temperature distribution
+qqnorm(poly_temp$temperature, main="Q-Q Plot for Temperature (Raw Data)")
+qqline(poly_temp$temperature)
+
+# Initial linear model for Temperature
+model2 <- lm(temperature ~ gcs_cat + iss_cat + invasive + sex + age_cat +
+             bleeding + fracture + concussion + brain_edema + brain_compression +
+             unconsciousness, data = poly_temp)
+
+cat("Summary for Initial Temperature Model (lm):\n")
+summary(model2)
+```
+**Interpretation (from this initial model):**
+*   Higher GCS (less severe TBI), higher ISS, and older age generally predicted lower temperature.
+*   Bleeding and concussion were associated with higher temperature.
+*   Male sex was not significant.
+
+**Reason for not using this approach in the final report:** The diagnostic plots (see below) indicated issues with this simple linear model, particularly regarding the distribution of residuals and the presence of outliers. This led to the decision to use robust regression (`lmrob`) for the final Temperature model, which is better suited for handling such data characteristics.
+
+#### 3.2.1 Diagnostics for Model 2
+
+```{r model_2_temp_diag, echo=TRUE, fig.height=6, fig.width=10}
+par(mfrow=c(2,2))
+plot(model2) # Standard lm diagnostic plots
+par(mfrow=c(1,1))
+
+# Half-normal plot of residuals
+car::qqPlot(resid(model2), distribution="norm", envelope=0.95,
+             main="Half-Normal Plot of Residuals (Model 2)", ylab="Residuals")
+
+# Predictions and observed vs. predicted plot
+poly_temp$temp_predicted <- predict(model2, poly_temp)
+ggplot(poly_temp, aes(x=temperature, y=temp_predicted)) +
+  geom_point(alpha=0.5) +
+  geom_abline(intercept=0, slope=1, color="red") +
+  labs(title="Predicted vs Observed Temperature (Model 2)", x="Observed", y="Predicted") +
+  theme_minimal()
+```
+**Observation:** The diagnostic plots, especially the Q-Q plot, did not look ideal, suggesting non-normality and potential outliers. This reinforced the need for robust methods.
+
+#### 3.2.2 Visualizing Effects for Temperature (Initial)
+
+```{r effects_temp, echo=TRUE, fig.height=4, fig.width=10}
+# Examine effects of ordered factors on Temperature
+par(mfrow=c(1,3))
+ggplot(poly_temp, aes(x=gcs_cat, y=temperature)) +
+  geom_boxplot() +
+  labs(title="Temperature by GCS Category", x="GCS Category", y="Temperature") +
+  theme_minimal()
+
+ggplot(poly_temp, aes(x=iss_cat, y=temperature)) +
+  geom_boxplot() +
+  labs(title="Temperature by ISS Category", x="ISS Category", y="Temperature") +
+  theme_minimal()
+
+ggplot(poly_temp, aes(x=age_cat, y=temperature)) +
+  geom_boxplot() +
+  labs(title="Temperature by Age Category", x="Age Category", y="Temperature") +
+  theme_minimal()
+par(mfrow=c(1,1))
+```
+
+### 3.3 Model 3: INR as Outcome (Initial Linear Model)
+
+This was an initial attempt to model INR using a standard linear model.
+
+```{r model_3_inr, echo=TRUE, fig.height=6, fig.width=10}
+# Drop NAs for INR for this specific model
+poly_inr <- poly %>% drop_na(inr)
+
+# Initial linear model for INR
+model3 <- lm(inr ~ gcs_cat + iss_cat + invasive + sex + age_cat +
+             bleeding + fracture + concussion + brain_edema + brain_compression +
+             unconsciousness, data = poly_inr)
+
+cat("Summary for Initial INR Model (lm):\n")
+summary(model3)
+```
+
+#### 3.3.1 Diagnostics for Model 3
+
+```{r model_3_diagnostics, echo=TRUE, fig.height=6, fig.width=10}
+par(mfrow=c(2,2))
+plot(model3) # Standard lm diagnostic plots
+par(mfrow=c(1,1))
+
+# Examine relationship between INR and ordered factors
+ggplot(poly_inr, aes(x=gcs_cat, y=inr)) +
+  geom_boxplot() +
+  labs(title="INR by GCS Category", x="GCS Category", y="INR") +
+  theme_minimal()
+
+cat("\nSummary Statistics for INR:\n")
+summary(poly_inr$inr)
+boxplot(poly_inr$inr, main="INR Distribution (Raw)")
+boxplot(log(poly_inr$inr), main="log(INR) Distribution")
+```
+**Observation:** The diagnostics for INR were "very bad" due to extreme outliers and a highly skewed distribution, even after a log transformation.
+
+#### 3.3.2 Model 3 with Log Transformation
+
+```{r model_3_inr_log, echo=TRUE, fig.height=6, fig.width=10}
+# Attempting a log transformation for INR
+model3_log <- lm(log(inr + 0.0001) ~ gcs_cat + iss_cat + invasive + sex + age_cat +
+                 bleeding + fracture + concussion + brain_edema + brain_compression +
+                 unconsciousness, data = poly_inr)
+
+cat("Summary for Log-transformed INR Model (lm):\n")
+summary(model3_log)
+
+par(mfrow=c(2,2))
+plot(model3_log)
+par(mfrow=c(1,1))
+```
+**Reason for not using this approach in the final report:** Even with a log transformation, the INR distribution and model diagnostics remained problematic. This led to the decision to use **Quick** (and its squared transformation) as the coagulopathy marker in the final analysis, as it exhibited much better statistical behavior and clinical interpretability.
+
+## 4. Key Learnings and Decisions from Initial Explorations
+
+This section summarizes the main insights gained from these early modeling attempts and explains why certain paths were not pursued, leading to the refined approaches in the main report.
+
+*   **Multivariate Mixed-Effects Models (for BP/HR):** While conceptually appealing for modeling multiple outcomes simultaneously, the complexity of interpreting interaction terms and the overall model structure led to a decision to pursue individual linear models for each outcome. This allowed for more tailored transformations and clearer interpretation of effects (we did, however, model them simultaneously in a different script!).
+*   **INR vs. Quick:** Initial exploration revealed that INR had a highly problematic distribution with extreme outliers, making it unsuitable for linear modeling even after transformations. **Quick**, a clinically related measure, showed much better statistical properties, especially after squaring. This led to the decision to use `Quick^2` as the primary coagulopathy outcome in the final report.
+*   **Temperature Modeling:** The initial linear model for temperature showed issues with residual normality and potential outliers. This highlighted the need for more robust methods.
+*   **Robust Regression:** The challenges with outliers and skewed distributions in continuous clinical outcomes (especially for Temperature and later CK) strongly indicated that standard Ordinary Least Squares (OLS) models were often insufficient. This led to the adoption of **robust regression (`lmrob`)** for the final models where necessary, as it provides more reliable parameter estimates in the presence of influential data points.
+*   **Data Transformations:** The need for transformations (e.g., log, square, inverse cube root) was evident from the initial diagnostic plots. These transformations were crucial for meeting linear model assumptions and improving model fit.
+*   **Categorical Variable Levels:** The decision to use ordered factors for GCS, ISS, and Age (e.g., `age_gen` with 3 levels) was made for improved clinical interpretability and to better capture non-linear relationships compared to continuous variables or more granular categories. Explorations with binary GCS groupings were also performed but did not yield significant advantages in model diagnostics or interpretability over the ordered factor.
+*   **Predictive Power (R^2):** Early observations of relatively low R-squared values for linear models (even after transformations) indicated the inherent variability in complex biological systems. This led to a check with Random Forest models (documented in the main report's appendix) to confirm that linear models were still appropriate for identifying relationships, even if they didn't explain a large proportion of total variance.
+
+This documentation provides a transparent overview of the iterative process involved in developing the final statistical models, highlighting the challenges encountered and the analytical decisions made to ensure robust and interpretable results.
