@@ -1,13 +1,20 @@
 ---
-title: "Traumatic Brain Injury in Polytrauma: A Statistical Analysis of Pathophysiological Impact"
+title: 'Traumatic Brain Injury in Polytrauma: A Statistical Analysis of Pathophysiological
+  Impact'
 author: "Saverio Fontana, Levy Jaeger, Valentin Johner"
 date: "`r Sys.Date()`"
 output:
+  html_document:
+    toc: true
+    df_print: paged
+    code_folding: show     # Enable code folding
   pdf_document:
     toc: true
     number_sections: true
     fig_caption: true
     keep_tex: true
+    
+
 ---
 
 ```{r setup, include=FALSE}
@@ -21,6 +28,10 @@ library(MASS) # Used for boxcox, load before tidyverse
 library(car) # Used for boxcox
 library(sfsmisc) # For p.res.2x, if you decide to include it
 library(lemon) # For coord_capped_cart in coefficient plots
+library(tableone)
+library(knitr)
+library(kableExtra)
+
 # Load any additional libraries needed
 ```
 
@@ -37,13 +48,9 @@ clean_path <- "02_data/02_clean_data/"
 # and specific brain injury indicators as factors.
 poly <- readRDS(paste0(clean_path, "population_poly.rds"))
 
-# Handle initial data quality issues for vital signs:
-# Remove cases with missing Blood Pressure (bp) or Heart Rate (hr) as these
-# are expected to be consistently measured at admission.
-poly <- poly %>% drop_na(bp, hr)
+#load the full population data
+population <- readRDS(paste0(clean_path, "population.rds"))
 
-# Remove extreme outlier for Heart Rate (HR > 250 bpm is physiologically unlikely)
-poly <- poly %>% filter(hr < 250)
 ```
 
 # 1. Executive Summary
@@ -134,20 +141,154 @@ The analysis was systematically structured around four primary physiological dom
 
 * **Abbreviated Injury Scale for Thoracic Injuries (AIS Thorax):** An ordered factor, AIS Thorax was included due to the significant role severe thoracic injury, particularly lung injury, plays in the overall pathophysiology of polytrauma.
 
-## ---- INR vs. Quick Exploration ----
-```{r inr-quick-eda, echo=TRUE, fig.height=4, fig.width=8}
-# Initial exploration of INR distribution
-par(mfrow=c(1,2))
-hist(poly$inr, main = "Histogram of INR", xlab = "INR value")
-hist(poly$quick, main = "Histogram of Quick", xlab = "Quick value")
-par(mfrow=c(1,1))
+## Exploratory Tables
 
-# Further exploration of transformations
-par(mfrow=c(1,2))
-boxplot(log(poly$inr), main = "log(INR) Distribution")
-boxplot(poly$quick^2, main = "Quick^2 Distribution")
-par(mfrow=c(1,1))
+### Table One: all cases
+
+```{r}
+table1 <- CreateTableOne(data = population,
+                         vars = c("age", "sex", "tbi",
+                                  "stay_days", "death",
+                                  "iss", "gcs_cat",
+                                  "invasive",
+                                  "novital", "nolab", "noais", "noiss"),
+                         factorVars = c("tbi", "death",
+                                         "invasive",
+                                        "novital", "nolab", "noais", "noiss")) |> 
+  print(nonnormal = c("age", "stay_days", "iss"),
+        printToggle = FALSE,
+        noSpaces = TRUE) |> 
+  data.frame() |> 
+  rownames_to_column(var = "Characteristic")
+
+
+
+
+# Print the table with improved styling
+table1 %>%
+  kable(format = "html", align = c("l", "r"), escape = FALSE) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    font_size = 14,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#4F81BD") %>%  # Header styling
+  column_spec(1, bold = TRUE, width = "3cm") %>%  # First column (Characteristic)
+  column_spec(2:ncol(table1), width = "2cm") %>%  # Other columns
+  scroll_box(width = "100%", height = "600px", fixed_thead = TRUE)  # Scrollable box
 ```
+
+#### Stratified by TBI and non TBI patients
+```{r table1_stratified}
+table1tbi <- CreateTableOne(data = population,
+                            strata = "tbi",
+                            vars = c("age", "sex",
+                                     "stay_days", "death",
+                                     "Head", "iss", "gcs_cat",
+                                      "invasive",
+                                     "novital", "nolab", "noais", "noiss"),
+                            factorVars = c("death", "Head",
+                                           "invasive",
+                                           "novital", "nolab", "noais", "noiss")) |> 
+  print(nonnormal = c("age", "stay_days", "iss"),
+        printToggle = FALSE,
+        noSpaces = TRUE, test = FALSE) |> 
+  data.frame() |> 
+  rownames_to_column(var = "Characteristic")
+colnames(table1tbi)[2:3] <- c("No TBI", "TBI")
+
+
+# Print the table with improved styling
+table1tbi %>%
+  kable(format = "html", align = c("l", "r"), escape = FALSE) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    font_size = 14,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#4F81BD") %>%  # Header styling
+  column_spec(1, bold = TRUE, width = "3cm") %>%  # First column (Characteristic)
+  column_spec(2:ncol(table1), width = "2cm") %>%  # Other columns
+  scroll_box(width = "100%", height = "600px", fixed_thead = TRUE)  # Scrollable box
+```
+
+### Table One: Polytrauma Cases Only
+
+```{r table1_polytrauma}
+table1_polytrauma <- CreateTableOne(data = poly,
+                                    includeNA = TRUE,
+                                    vars = c("age", "sex", "tbi",
+                                             "stay_days", "death",
+                                             "iss", "gcs_cat",
+                                              "invasive",
+                                             "novital", "nolab", "noais", "noiss"),
+                                    factorVars = c("tbi", "death",
+                                                    "invasive",
+                                                   "novital", "nolab", "noais", "noiss")) |> 
+  print(nonnormal = c("age", "stay_days", "iss"),
+        printToggle = FALSE,
+        noSpaces = TRUE) |> 
+  data.frame() |> 
+  rownames_to_column(var = "Characteristic")
+
+# Print the table with improved styling
+table1_polytrauma %>%
+  kable(format = "html", align = c("l", "r"), escape = FALSE) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    font_size = 14,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#4F81BD") %>%  # Header styling
+  column_spec(1, bold = TRUE, width = "3cm") %>%  # First column (Characteristic)
+  column_spec(2:ncol(table1), width = "2cm") %>%  # Other columns
+  scroll_box(width = "100%", height = "600px", fixed_thead = TRUE)  # Scrollable box
+
+```
+
+
+#### Stratified by TBI and non TBI patients
+```{r table1_polytrauma_stratified}
+table1tbi_polytrauma <- CreateTableOne(data = poly,
+                                       strata = "tbi",
+                                       vars = c("age", "sex",
+                                                "stay_days", "death",
+                                                "Head", "iss",
+                                                "gcs_cat",
+                                                "invasive",
+                                                "novital", "nolab"),
+                                       factorVars = c("death", "Head",
+                                                      "invasive",
+                                                      "novital", "nolab"),
+                                       
+                                       includeNA = TRUE) |> 
+  print(nonnormal = c("age", "stay_days", "iss"),
+        printToggle = FALSE,
+        noSpaces = TRUE, test = FALSE) |> 
+  data.frame() |> 
+  rownames_to_column(var = "Characteristic")
+colnames(table1tbi_polytrauma)[2:3] <- c("No TBI", "TBI")
+
+# Print the table with improved styling
+table1tbi_polytrauma %>%
+  kable(format = "html", align = c("l", "r"), escape = FALSE) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    font_size = 14,
+    position = "left"
+  ) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#4F81BD") %>%  # Header styling
+  column_spec(1, bold = TRUE, width = "3cm") %>%  # First column (Characteristic)
+  column_spec(2:ncol(table1), width = "2cm") %>%  # Other columns
+  scroll_box(width = "100%", height = "600px", fixed_thead = TRUE)  # Scrollable box
+
+```
+
+
 
 ### 3.3 Data Preprocessing and Handling Missingness
 
@@ -157,6 +298,17 @@ For vital signs such as Blood Pressure and Heart Rate, which are routinely measu
 *TODO: Table with missing values maybe*
 
 Despite the potential for informative missingness, the chosen strategy for the primary analysis was to *remove cases with any missing values* from the dataset. Prior to this, imputation strategies using typical "normal" values (e.g., 37.0°C for temperature, INR 0.8-1.1, Quick = 100) were explored. The results of these checks indicated that the core findings and parameter estimates were robust and did not meaningfully change when such imputations were applied.
+
+## ---- NA Treatment for blood pressure and heart rate ----
+```{r}
+# Remove cases with missing Blood Pressure (bp) or Heart Rate (hr) as these
+# are expected to be consistently measured at admission.
+poly <- poly %>% drop_na(bp, hr)
+
+# Remove extreme outlier for Heart Rate (HR > 250 bpm is physiologically unlikely)
+poly <- poly %>% filter(hr < 250)
+```
+
 
 ## ---- NA Treatment for Quick and Temperature ----
 ```{r na-treatment, echo=TRUE}
@@ -170,6 +322,21 @@ temp_nona <- poly %>% drop_na(temperature)
 
 **Transformations and Derived Variables:**
 Several outcome variables exhibited skewed distributions or non-linear relationships with predictors, necessitating specific transformations to meet the assumptions of linear models. These transformations were selected after inspection of distribution shapes and residual diagnostics from exploratory linear models. The application of Box-Cox transformations proved particularly useful for addressing skewed residual distributions.
+
+For Example, here we report the Exploration of INR vs. Quick 
+```{r inr-quick-eda, echo=TRUE, fig.height=4, fig.width=8}
+# Initial exploration of INR distribution
+par(mfrow=c(1,2))
+hist(poly$inr, main = "Histogram of INR", xlab = "INR value")
+hist(poly$quick, main = "Histogram of Quick", xlab = "Quick value")
+par(mfrow=c(1,1))
+
+# Further exploration of transformations
+par(mfrow=c(1,2))
+boxplot(log(poly$inr), main = "log(INR) Distribution")
+boxplot(poly$quick^2, main = "Quick^2 Distribution")
+par(mfrow=c(1,1))
+```
 
 The specific transformations applied were:
 
