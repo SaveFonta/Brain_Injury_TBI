@@ -1,9 +1,14 @@
 ---
-title: "Diagnosen"
+title: "Cleaning and Exploration of Diagnosen and mapping Datasets"
 author: "Saverio Fontana"
 date: "2025-03-05"
-output: html_document
+output: 
+  html_document:
+    toc: true               # Add table of contents
+    toc_float: true        # Allow floating TOC
+    code_folding: show     # Enable code folding
 ---
+
 
 ```{r setup, include=FALSE}
 # define paths
@@ -26,10 +31,11 @@ knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_knit$set(root.dir = normalizePath(".."))
 ```
 
-```{r verify, echo=FALSE}
-# Verify the working directory changed
-cat("New working directory:", getwd())
-```
+# Diagnoses Dataframe
+
+## Data Import and Initial Exploration
+
+We begin by importing two potential data sources for diagnosis information.
 
 ```{r Diagnosen}
 # function for data import from .csv files
@@ -53,7 +59,9 @@ Diagnosen2 <- all_data[["(SDS).(v_Export_Diagnosen_tra_s"]]
 
 ```
 
-The other sheets in the Excel seems more like summary and counting table (e.g. Pivog Table) than useful data, so Iwill stick for the analysis w/ the first sheet. Maybe we can discuss about the others.
+The other sheets in the Excel seems more like summary and counting table (e.g. Pivot Table) than useful data, so we will stick for the analysis w/ the first sheet.
+
+### Comparing the two datasets
 
 ```{r Comparing datasets}
 data1 <- Diagnosen
@@ -77,7 +85,7 @@ data2 <- data2 %>% arrange(across(all_of(key_cols)))
 dim(data1)
 dim(data2)
 
-#same nmbr of rows, but different columns 
+#same number of rows, but different columns 
 
 
 # Compare different rows
@@ -90,8 +98,12 @@ dim(missing_in_data1)
 
 Upon inspection, it's clear the same rows are different. The only thing that changes is the formatting, cause there is a blank space at the end of the column name of missing_in_data2.
 
-we can then conclude that it is the same dataframe. For this reason we will work with Diagnosen2, which has more variables. 
+We can then conclude that it is the same dataframe. For this reason we will work with Diagnosen2 (the Excel file), which has more variables. 
 
+
+## Data Cleaning and Trasformation 
+
+### Initial cleaning 
 
 ```{r cleaning1}
 # Create a translation dictionary
@@ -151,9 +163,7 @@ Diagnosen2 <- Diagnosen2 %>%
 ```
 
 
-
-
-
+### Handling missing values and duplicates 
 ```{r cleaning2}
 
 #check missing values
@@ -176,8 +186,6 @@ na_any_column_df <- Diagnosen2[!complete.cases(Diagnosen2), ]
 
 #I will remove them for now, I dont think it has a big impact....
 
-#Anyway since some "display_name" miss, we could work with "name" which has 0 missing values. We can discuss it. 
-
 
 # Remove rows with NAs
 Diagn_clean <- Diagnosen2[complete.cases(Diagnosen2), ]
@@ -190,7 +198,9 @@ Diagn_clean <- unique(Diagn_clean)
 head(Diagn_clean)
 ```
 
-After this cleaning, I looked it up for an automatic translator ( for the column "name"). There are some libraries if we want, but it's a bit of work cause we should setup an API for google translate (not that hard tbh, but we can discuss)
+
+
+### Text Data Processing
 
 ```{r Work on text}
 # Clean up the text data
@@ -226,19 +236,11 @@ print(paste("Number of duplicate patient entries:", nrow(dupes)))
 
 Upon inspection, each case can have multiple rows cause I suppose for each injury they fill out a new row w/ a new description of the injury. 
 
-This lead to the question: how do we handle all these injuries? Do we use the column "name" or "display_name"? 
 
-```{r display_name vs name}
-names <- Diagn_clean %>% filter(display_name != name) %>% select(display_name, name) %>% unique()
-names[1:10,]
-```
-
-They honestly seem super similar.... but this is up to you guys (German is too much)
-I will stick with display_name as Vale did, we can always change this choice.
-
+### Final Data Aggregation
 
 ```{r}
-#Drop variable name
+#Drop variable name (we use display_name)
 Diagn_clean <- Diagn_clean %>%
   select(-name)
 
@@ -296,32 +298,8 @@ export(x = Diagnosis_cleaned,
 
 ```
 
-# Codebook
 
-* **research_case_id**: character, ID of the case (unique identifier).
-* **date**: Date, date when the case or incident occurred (format: YYYY-MM-DD).
-* **bleeding**: factor (binary), indicator for any bleeding present (0 = No, 1 = Yes).
-* **fracture**: factor (binary), indicator for any fracture present (0 = No, 1 = Yes).
-* **subdural_bleeding**: factor (binary), indicator for subdural bleeding (0 = No, 1 = Yes).
-* **epidural_bleeding**: factor (binary), indicator for epidural bleeding (0 = No, 1 = Yes).
-* **subarachnoid_bleeding**: factor (binary), indicator for subarachnoid bleeding (0 = No, 1 = Yes).
-* **contusion**: factor (binary), indicator for contusion (0 = No, 1 = Yes).
-* **diffuse_brain_injuries_and_ripping_shearing**: factor (binary), indicator for diffuse brain injuries and ripping/shearing (0 = No, 1 = Yes).
-* **other_bleeding**: factor (binary), indicator for other types of bleeding not listed separately (0 = No, 1 = Yes).
-* **skull_base_fracture**: factor (binary), indicator for skull base fracture (0 = No, 1 = Yes).
-* **skull_cap_fracture**: factor (binary), indicator for skull cap (calvarium) fracture (0 = No, 1 = Yes).
-* **unconsciousness**: factor (binary), indicator for unconsciousness present (0 = No, 1 = Yes).
-* **concussion**: factor (binary), indicator for concussion (0 = No, 1 = Yes).
-* **brain_edema**: factor (binary), indicator for brain edema (0 = No, 1 = Yes).
-* **brain_compression**: factor (binary), indicator for brain compression (0 = No, 1 = Yes).
-* **concussion_correction_formula**: factor (binary), derived variable for concussion correction based on internal logic (0 = No, 1 = Yes).
-* **concussion_correction_including_unconsciousness_in_tbi**: factor (binary), derived variable for concussion correction including unconsciousness in TBI (0 = No, 1 = Yes).
-* **injury_descriptions**: character, detailed narrative of all diagnosed injuries and conditions associated with the case, in German.
-* **num_injuries**: integer, number of distinct injuries/diagnoses mentioned in *injury_descriptions*.
-
-
-
-
+### First Inspection
 
 ```{r Fast ispection}
 # Histogram of the number of injuries per person
@@ -338,8 +316,10 @@ injury_columns <- c("bleeding", "fracture", "subdural_bleeding", "epidural_bleed
                     "unconsciousness", "concussion", "brain_edema", "brain_compression",
                     "concussion_correction_formula", "concussion_correction_including_unconsciousness_in_tbi")
 
+```
+### Long Format trasformation
 
-
+```{r}
 #change to long format ( I dont know if necessary)
 Diagnosis_long <- Diagnosis_cleaned %>%
   select(research_case_id, all_of(injury_columns)) %>%
@@ -361,17 +341,12 @@ save(Diagnosis_long,
 export(x = Diagnosis_long,
        file = paste0(clean_path, "Diagnosis_long.csv"))
 ```
-# Codebook
-
-* **research_case_id**: character, ID of the case (unique identifier), repeated for each injury type related to that case.
-* **injury_type**: character, name of the specific injury or condition assessed for the case (e.g., "bleeding", "fracture", "subdural_bleeding").
-* **has_injury**: integer (binary), indicator whether the specified injury/condition (*injury_type*) is present in the case (0 = No, 1 = Yes).
 
 
 
+# Mapping Dataframe
 
-## Mapping Diagnosen
-
+## Cleaning mapping data
 ```{r mapping}
 mapping <- import_dataset(paste0(import_path, 
                                 "[SDS].[v_Export_Mapping_Diagnosen_ICD_to_AIS_tra_sds].csv"))
@@ -399,10 +374,7 @@ unique(mapping$ISS_BODY_REGION)
 unique(mapping$MAX_AIS_SEVERITY)
 
 
-#Maybe I am just tired but what are those? Anyway I'd convert to factor
-"mapping$AIS_CHAPTER <- as.factor(mapping$AIS_CHAPTER) 
-mapping$ISS_BODY_REGION <- as.factor(mapping$ISS_BODY_REGION)
-mapping$MAX_AIS_SEVERITY <- as.factor(mapping$MAX_AIS_SEVERITY)"
+
 
 #Missing?
 table(is.na(mapping))
@@ -461,16 +433,6 @@ export(x = mapping_cleaned,
 ```
 
 
-# Codebook
-
-* **AIS_CHAPTER**: integer, represents the chapter number of the AIS (Abbreviated Injury Scale) classification.
-* **Dat**: Date, the date when the injury or event occurred (format: YYYY-MM-DD).
-* **DESCRIPTION**: character, a detailed description of the injury or condition.
-* **ISS_BODY_REGION**: integer, represents the body region affected by the injury based on AIS classification (for example, 4 could indicate a specific region like "limbs").
-* **MAX_AIS_SEVERITY**: integer, the maximum severity score of the injury on the AIS scale (range 0 to 6).
-* **research_case_id**: character, ID of the case, which uniquely identifies the patient or incident.
-
-
 ```{r}
 # Check for duplicate patient IDs
 dupes <- mapping %>%
@@ -478,62 +440,52 @@ dupes <- mapping %>%
   filter(n() > 1)
 print(paste("Number of duplicate patient entries:", nrow(dupes)))
 ```
-So almost each patient has more than 1 row.
-At this point there are so many ways to format the table to have a row for each patients that maybe we need to discuss about it. Here are some ideas: 
-
-```{r}
-
-# One row per patient
-# Create a summary table with unique research_case_id for each row
-patient_summary <- mapping %>%
-  group_by(research_case_id) %>%
-  summarise(
-    
-    # Get the first injury date for the patient
-    latest_injury_date = min(Dat, na.rm = TRUE),
-    
-    # Calculate the number of distinct body regions injured
-    distinct_body_regions_injured = n_distinct(ISS_BODY_REGION),
-    
-    # take  max severity per patient
-    max_severity = max(MAX_AIS_SEVERITY, na.rm = TRUE),
-    
-    #OTHER IDEAS?? 
-    
-    # Sum of injuries 
-    sum_injuries = sum(ISS_BODY_REGION != 0, na.rm = TRUE),  # don't count the zero
-    
-    # Concatenate all injury descriptions for the same patient
-    all_injury_descriptions = paste(unique(DESCRIPTION), collapse = "; ")
-  ) %>%
-  ungroup()
-
-# View the resulting table
-head(patient_summary)
+So almost each patient has more than 1 row
 
 
 
-```
+# Codebooks
+
+## Diagnosis 
+
+* **research_case_id**: character, ID of the case (unique identifier).
+* **date**: Date, date when the case or incident occurred (format: YYYY-MM-DD).
+* **bleeding**: factor (binary), indicator for any bleeding present (0 = No, 1 = Yes).
+* **fracture**: factor (binary), indicator for any fracture present (0 = No, 1 = Yes).
+* **subdural_bleeding**: factor (binary), indicator for subdural bleeding (0 = No, 1 = Yes).
+* **epidural_bleeding**: factor (binary), indicator for epidural bleeding (0 = No, 1 = Yes).
+* **subarachnoid_bleeding**: factor (binary), indicator for subarachnoid bleeding (0 = No, 1 = Yes).
+* **contusion**: factor (binary), indicator for contusion (0 = No, 1 = Yes).
+* **diffuse_brain_injuries_and_ripping_shearing**: factor (binary), indicator for diffuse brain injuries and ripping/shearing (0 = No, 1 = Yes).
+* **other_bleeding**: factor (binary), indicator for other types of bleeding not listed separately (0 = No, 1 = Yes).
+* **skull_base_fracture**: factor (binary), indicator for skull base fracture (0 = No, 1 = Yes).
+* **skull_cap_fracture**: factor (binary), indicator for skull cap (calvarium) fracture (0 = No, 1 = Yes).
+* **unconsciousness**: factor (binary), indicator for unconsciousness present (0 = No, 1 = Yes).
+* **concussion**: factor (binary), indicator for concussion (0 = No, 1 = Yes).
+* **brain_edema**: factor (binary), indicator for brain edema (0 = No, 1 = Yes).
+* **brain_compression**: factor (binary), indicator for brain compression (0 = No, 1 = Yes).
+* **concussion_correction_formula**: factor (binary), derived variable for concussion correction based on internal logic (0 = No, 1 = Yes).
+* **concussion_correction_including_unconsciousness_in_tbi**: factor (binary), derived variable for concussion correction including unconsciousness in TBI (0 = No, 1 = Yes).
+* **injury_descriptions**: character, detailed narrative of all diagnosed injuries and conditions associated with the case, in German.
+* **num_injuries**: integer, number of distinct injuries/diagnoses mentioned in *injury_descriptions*.
 
 
-Or even something like that with the dummyes but idk
-```{r}
-patient_injury_counts_by_severity <- mapping %>%
-  group_by(research_case_id) %>%
-  summarise(
-    count_severity_0 = sum(MAX_AIS_SEVERITY == 0, na.rm = TRUE),
-    count_severity_1 = sum(MAX_AIS_SEVERITY == 1, na.rm = TRUE),
-    count_severity_2 = sum(MAX_AIS_SEVERITY == 2, na.rm = TRUE),
-    count_severity_3 = sum(MAX_AIS_SEVERITY == 3, na.rm = TRUE),
-    count_severity_4 = sum(MAX_AIS_SEVERITY == 4, na.rm = TRUE),
-    count_severity_5 = sum(MAX_AIS_SEVERITY == 5, na.rm = TRUE),
-    count_severity_6 = sum(MAX_AIS_SEVERITY == 6, na.rm = TRUE),
-  ) %>%
-  ungroup()
+## Diagnosis long
 
-```
+* **research_case_id**: character, ID of the case (unique identifier), repeated for each injury type related to that case.
+* **injury_type**: character, name of the specific injury or condition assessed for the case (e.g., "bleeding", "fracture", "subdural_bleeding").
+* **has_injury**: integer (binary), indicator whether the specified injury/condition (*injury_type*) is present in the case (0 = No, 1 = Yes).
 
 
+
+## Mapping
+
+* **AIS_CHAPTER**: integer, represents the chapter number of the AIS (Abbreviated Injury Scale) classification.
+* **Date**: Date, the date when the injury or event occurred (format: YYYY-MM-DD).
+* **DESCRIPTION**: character, a detailed description of the injury or condition.
+* **ISS_BODY_REGION**: integer, represents the body region affected by the injury based on AIS classification (for example, 4 could indicate a specific region like "limbs").
+* **MAX_AIS_SEVERITY**: integer, the maximum severity score of the injury on the AIS scale (range 0 to 6).
+* **research_case_id**: character, ID of the case, which uniquely identifies the patient or incident.
 
 
 

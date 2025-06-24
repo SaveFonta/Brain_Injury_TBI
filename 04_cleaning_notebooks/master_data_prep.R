@@ -6,11 +6,9 @@
 
 # Define the order of R Markdown files to run 
 rmarkdown_files <- c(
-  "01_clean_diagnosen.Rmd",
-  "01_clean_iss_interventions_01.Rmd",
-  "01_clean_iss_interventions.Rmd",
-  "01_clean_vital_lab_patients.Rmd",
-  "01_clean_vital_lab_patients02.Rmd",
+  "01_clean_diagnosen+mapping.Rmd",
+  "01_clean_iss+interventions.Rmd",
+  "01_clean_vital+lab+patients.Rmd",
   "01_table4_01.Rmd",
   "03_table1_01.Rmd"
 )

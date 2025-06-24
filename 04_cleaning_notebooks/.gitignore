@@ -1,1 +1,10 @@
-01_clean_diagnosen.html
+# Ignore all HTML files
+*.html
+
+# Ignore RStudio project files
+*.Rproj
+
+# Ignore R environment files (like .RData, .Rhistory, etc.)
+.RData
+.Rhistory
+.Rproj.user/

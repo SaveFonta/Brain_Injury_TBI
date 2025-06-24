@@ -1,8 +1,12 @@
 ---
 title: "Analysis of Missing GCS and Table 4: Intervention & GCS"
-output: html_document
 date: "2025-03-17"
 author: vjohner
+output: 
+  html_document:
+    toc: true               # Add table of contents
+    toc_float: true        # Allow floating TOC
+    code_folding: show     # Enable code folding
 ---
 
 ```{r setup, include=FALSE}
@@ -17,10 +21,11 @@ library(ggplot2)
 knitr::opts_knit$set(root.dir = normalizePath(".."))
 ```
 
-## Analysis of Mismatch and Missing GCS
+# Analysis of Missing GCS
 
 The client wishes, among others, a dataset containing a count of each intervention grouped by gcs scores. As already discussed, a lot of GCS scores are missing, but potentially still informative.
 
+## Data Preparation
 ```{r mismatch_1}
 # import interventions data set
 load("02_data/02_clean_data/interventions1_wide.RData")
@@ -28,7 +33,7 @@ interventions <- interventions1_wide
 # import vitals data set for GCS scores
 load("02_data/02_clean_data/vitals_clean.RData")
 
-# remove unnecessary cols, rename, TAKE OUT ROWS WITH NO GCS (CAN'T BE FINAL SOLUTION!)
+# remove unnecessary cols, rename, TAKE OUT ROWS WITH NO GCS
 vitals <- vitals_clean %>% select(research_case_id, gcs)
 
 # Remove datasets with long name
@@ -37,7 +42,7 @@ rm(interventions1_wide, vitals_clean)
 
 ```
 
-Check for mismatch
+## Check for mismatch
 
 ```{r mismatch_2}
 
@@ -67,6 +72,7 @@ print(cat("Number of cases with no procedure at all:", no_trt))
 
 ```
 Interpretation is as follows: 262 cases in `interventions` are not in `vitals`, and 1402 cases from `vitals`do not exist in `interventions`. Although the majority of cases (17089) in `interventions` received no treatment at all, we treat the missing cases from `vitals` as having received no treatment/intervention (client's decision). The cases from `interventions` missing in `vitals` I decided to treat similar to cases with missing GCS values. To be able to differentiate the reason of missing I classified them as -1 though (clearly invalid but numeric, easy to change to NA with code commented out).
+
 
 ```{r mismatch_3}
 # Ensure both datasets are tibbles
@@ -111,7 +117,7 @@ check <-  full_join(Diagnosis_cleaned, vitals, by = "research_case_id") %>% filt
 
 head(check)
 ```
-No obvious pattern or indications as to why they are missing in `vitals`, i.e. have missing GCS scores. (MAYBE LEVY YOU SEE SOMETHING?) As stated above, I suggested we treat them as missing until we figure out how to handle all the other missing GCS.
+No obvious pattern or indications as to why they are missing in `vitals`, i.e. have missing GCS scores. As stated above, I suggested we treat them as missing until we figure out how to handle all the other missing GCS.
 
 Thus: How to tackle are the missing values in the GCS score? We can check with the `Diagnosis_cleaned` dataset if we can find a reason as to why the GCS values might be missing. The client did not know.
 
@@ -168,7 +174,7 @@ ggplot(missing_gcs_data, aes(x = "", y = Count, fill = Category)) +
 ```
 *CAVEAT:* There are no cases in the whole dataset that have 0 in the column number of injuries. Thus, "No Diagnosis" does not (necessarily) mean that the person was not a trauma patient, but merely indicates that among the *selected* diagnoses none was made. I am not sure how the diagnoses in the dataset (as columns) relate to others not included, i.e., also with regards to the number of injuries. (LEVY, DO YOU KNOW HOW THESE DIAGNOSES ARE "SPECIAL" OR RELEVANT?)
 
-## Table 4
+# Table 4
 
 Finally, let's create the table wished by the client.
 
@@ -212,7 +218,7 @@ table4_2 <- full_data2 %>%
   summarise(Count = sum(Performed), .groups = "drop") %>%
   pivot_wider(names_from = "Intervention", values_from = "Count", values_fill = 0)
 
-# Export to rds file (like Prof. Mächler told us to)
+# Export to rds file
 saveRDS(table4, file = "02_data/02_clean_data/Table4.RDS")
 
 ```
@@ -294,6 +300,5 @@ ggplot(tbi_intervention_counts, aes(x = TBI_Severity, y = Total_Interventions, f
 ```
 
 
-### ** fill in here **
-- **Blabla**  
+
 

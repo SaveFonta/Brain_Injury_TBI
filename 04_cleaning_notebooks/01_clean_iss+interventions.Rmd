@@ -1,8 +1,12 @@
 ---
 title: "Cleaning and Exploration of ISS and Interventions Datasets"
-output: html_document
 date: "2025-03-02"
 author: vjohner
+output: 
+  html_document:
+    toc: true               # Add table of contents
+    toc_float: true        # Allow floating TOC
+    code_folding: show     # Enable code folding
 ---
 
 ```{r setup, include=FALSE}
@@ -25,8 +29,9 @@ library(stringi)
 knitr::opts_knit$set(root.dir = normalizePath(".."))
 ```
 
-## ISS
+# ISS Dataset
 
+## Data Import and Cleaning
 ```{r iss}
 # function for data import from .csv files
 import_dataset <- function(...) {
@@ -55,15 +60,18 @@ export(x = iss_clean,
 
 Nothing really to do on this dataset: no missing values, not duplicates, nicely formatted. We drop research_id for now and convert the ISS column to lowercase for coherence, otherwise no operation necessary on the dataset 'iss'.
 
-Codebook:
+## Codebook:
 
 * __research_case_id__: character, ID of case.
 * __iss__: integer, Injury Severity Score (integer 1-75; ISS = (AIS1)^2 + (AIS2)^2 + (AIS3)^2).
 
+*Note*: The ISS dataset required minimal cleaning - no missing values or duplicates were found.
 
-## (Surgical) Interventions and Procedures
+# Interventions Dataset
 
 We have two datasets containing data about interventions and procedures. The dataset `interventions1` contains surgical interventions on the head or brain (I think, no expert --> Levy?), whereas `interventions2` contains a lot (too many, we'll see after cleaning) of procedures performed on the patient, which are not (necessarily) surgical. E.g., they include also infusions, controls, and scans (not sure how useful they are for the final analysis if we have so many). We'll start with `interventions1`:
+
+## Surgical Interventions (Dataset 1)
 
 ```{r interventions1}
 interventions1 <- import_dataset(paste0(import_path,
@@ -87,7 +95,7 @@ table(is.na(interventions1))
 ```
 
 
-
+## General Procedures (Dataset 2)
 Let's continue with `interventions2`. As before, we drop research_id. Also, we drop the variable "Kat", since it contains only the value "CHOP" and is thus hardly informative. For now, we also drop the date column (should we need it later easy to add). We also remove the variable KapitelC14, I couldn't find out much about what information it contains (maybe interventions in the face?). A quick assurance of it's irrelevance with the client and/or Levy maybe useful. The binary variable HighInterest contains mostly 1. The 0 are limited to "DefSurg" and "Burn" interventions. I don't see the point in considering this variable, but again a quick reassurance can't hurt.
 
 ```{r interventions2}
@@ -108,6 +116,8 @@ names <- interventions2 %>% filter(Displayname != Name) %>% select(Displayname, 
 names[1:10,]
 
 ```
+
+## Text Cleaning and Standardization
 
 Here we encounter the problem of choosing between the columns "Name" and "Displayname". They contain similar, but often different entries. However, they often only differ by details that are irrelevant wrt content. On closer inspection, it looks as if Displayname contains generic and more consistent values, with Name showing small differences even for identical procedures. Since the granularity is probably already too fine for our analysis anyway, we choose Displayname, which is slightly less granular and requires less cleaning. It is also noticeable that many Umlauts were not read in correctly. We address this as well and thus obtain more consistent values.
 
@@ -203,6 +213,9 @@ Also, I suggest the possibility of filtering out procedures that are "rare" in s
 
 Since both dataset `interventions1` and `interventions2` contain data about procedures or interventions, it might make sense to merge them. However, my suspicion is that `interventions1` contains surgical procedures, whereas `interventions2` does not. I will thus merge them (keeping track of the origin with "surgical" and "mixed", which may be flawed!) but export all datasets separately as well. Which we will use (if any) can thus be decided at a later point in the project (also, which format).
 
+
+## Dataset Merging and Export
+
 ```{r interventions6}
 
 # Convert interventions2 into wide format
@@ -291,24 +304,20 @@ export(x = merged_interventions_wide,
 ```
 Note that I added a count column to `interventions1` filled with 1s in order to merge them. The dataset `interventions1` has no duplicates in research_case_id, meaning no procedure was performed twice on the same patient/case (in contrast to `interventions2`).
 
-Codebook:
+## Codebook:
 
 * __research_case_id__: character, ID of case.
 * __source__: character, values "surgical" and "mixed", original dataset.
 * __procedure__: character, either the name ("surgical") or code ("mixed") of the performed procedure.
 * __procedure_count__: integer, # times procedure was performed.
 
-Note that in wide format there are a lot more columns with the names of the procedures or the according code values. For consistency, they are all coded as characters.
+*Note*: Wide format versions contain columns for each procedure with counts.
 
 
 
-### ** Open Questions (maybe Levy or Client for qualitative issues) **
+
+### ** Open Questions (Ask Client) **
 - **Do we need both surgical (`interventions1`) and non-surgical (`interventions2`) interventions together, or should we analyze them separately? I am right with this distinction?**  
 - **What level of granularity should we use for procedure codes? XX? XX.X? Just X?**  
 - **Should we remove rare procedures (<5 occurrences), or do they provide meaningful insights?**  
 - **Does the procedure categorization (surgical vs. mixed) make sense, or should we reconsider?**  
-
----
-
-
-
