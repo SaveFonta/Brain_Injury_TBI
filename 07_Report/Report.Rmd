@@ -13,7 +13,10 @@ output:
     number_sections: true
     fig_caption: true
     keep_tex: true
-    
+bibliography:
+  report_references.bib
+csl:
+  vancouver
 
 ---
 
@@ -38,7 +41,7 @@ library(kableExtra)
 ## ---- Load data & Initial Preparation ----
 ```{r load-data, echo=TRUE}
 # Go one level up in the folder structure (otherwise in 07_Report)
-setwd("..")
+# setwd("..")
 
 # Define path to cleaned data
 clean_path <- "02_data/02_clean_data/"
@@ -94,7 +97,7 @@ The analysis was systematically structured around four primary physiological dom
 
 | Variable Name | Category | Type | Transformation |
 | :---------------------- | :--------- | :------------- | :--------------- |
-| Systolic Blood Pressure | Outcome | Continuous | `sqrt()` |
+| Mean Arterial Pressure | Outcome | Continuous | `sqrt()` |
 | Heart Rate | Outcome | Continuous | `log()` |
 | Lactate | Outcome | Continuous | `^(-1/3)` |
 | Hemoglobin | Outcome | Continuous | `^2` |
@@ -116,7 +119,10 @@ The analysis was systematically structured around four primary physiological dom
 
 **Outcome Variables:** These variables were selected to quantify the physiological state across the four dimensions of polytrauma pathophysiology: 
 
-* **Shock (Circulation):** Systolic Blood Pressure (continuous), Heart Rate (continuous), Lactate (continuous), and Hemoglobin (continuous).   
+* **Shock (Circulation):** Mean Arterial Pressure (MAP; continuous), Heart Rate (continuous), Lactate (continuous), and Hemoglobin (continuous). MAP was calculated using the formula
+$$
+ \text{MAP} = \frac{2}{3} \text{Diastolic Blood Pressure} + \frac{1}{3} \text{Systolic Blood Pressure}.
+$$
 
 * **Coagulopathy:** Quick (continuous). Initially, INR was considered as a marker for coagulopathy. However, during exploratory data analysis (EDA), INR exhibited erratic distributions and remained unstable even after logarithmic transformation. Quick is approximately inversely proportional to INR (Quick = 100 / INR). This approximate inverse relationship held in the dataset. The decision to proceed with Quick was driven by its better statistical behavior and greater clinical interpretability compared to a heavily transformed INR, ensuring more reliable and understandable results.
 
@@ -358,26 +364,163 @@ The specific transformations applied were:
 The overarching goal of this analysis was to find out how traumatic brain injury influences the various dimensions of polytrauma pathophysiology. Given that the outcome variables span multiple physiological systems, the initial analytical strategy aimed for a holistic understanding of these interconnected effects.
 
 ### 4.1 Initial Multivariate Exploration: A Holistic View
+
 An initial idea was to model all outcomes simultaneously within a multivariate framework. This approach was intended to capture shared variance across different physiological parameters and explicitly account for correlations among outcomes observed within the same patient. For instance, a patient with severe TBI might simultaneously experience alterations in blood pressure, heart rate, and coagulation, and a multivariate model could inherently account for these within-patient dependencies.
 
-To achieve this holistic perspective, a multivariate Generalized Linear Mixed Model (GLMM) was employed using the `glmmTMB` package in R. The rationale behind this model was to treat each physiological measurement as a binary variable. This was achieved by dichotomizing the continuous outcomes based on clinically relevant cutoffs, thereby identifying whether a patient's value fell below or above a critical threshold indicative of severe alteration. 
+To achieve this holistic perspective, a multivariate Generalized Linear Mixed Model (GLMM) was fitted using the `glmmTMB` package in R [@mollie_2017]. The rationale behind this model was to treat each physiological measurement as a binary variable. This was achieved by dichotomizing the continuous outcomes based on clinically relevant cutoffs, thereby identifying whether a patient's value fell below or above a critical threshold indicative of severe alteration, derived from the relevant trauma literature [@pape_2022; @cecconi_2014; @kodadek_2022; @atls_2018; @pape_2014; @rossaint_2023]. Note that for creatine kinase, we used a cutoff of 950 U/L, corresponding to five times the upper reference limit of 190 U/L reported in the laboratory dataset.
 
-| Outcome Variable | Clinical Cutoff | Interpretation (Example) |
+| Outcome Variable | Clinical Cutoff | Interpretation |
 | :--------------- | :-------------- | :------------------------------------------------------ |
-| Hemoglobin | < 80 g/l | Severe Anemia |
-| Blood Pressure | *Placeholder* | Hypotension |
-| Heart Rate | *Placeholder* | Tachycardia |
-| Lactate | *Placeholder* | Hyperlactatemia |
-| Quick | *Placeholder* | Coagulopathy |
-| Body Temperature | *Placeholder* | Hypothermia |
-| Creatine Kinase | *Placeholder* | Severe Muscle Injury |
-*Table 2: Dichotomization Thresholds for GLMM*
+| Hemoglobin | < 70 g/L | Anemia |
+| Mean Arterial Pressure | < 65 mmHg | Hypotension |
+| Heart Rate | > 100 bpm | Tachycardia |
+| Lactate | > 2 mmol/L | Hyperlactatemia |
+| International Normalized Ratio | > 1.2 | Coagulopathy |
+| Body Temperature | < 35 °C | Hypothermia |
+| Creatine Kinase | > 950 U/L | Elevated Creatine Kinase |
+*Table 2: Dichotomization Thresholds for the multivariate model.*
 
-*TODO: Levy fill table and say if makes sense*
 
-The inclusion of a random effect per patient allowed the model to account for the inherent correlation between different outcomes measured within the same individual, acknowledging that a patient's overall physiological state influences all their measurements. The output of this multivariate model provided odds ratios for each predictor across all dichotomized outcomes.
+The inclusion of a random effect per patient allowed the model to account for the inherent correlation between different outcomes measured within the same individual, acknowledging that a patient's overall physiological state influences all their measurements. The output of this multivariate model provided odds ratios (ORs) for each predictor across all dichotomized outcomes.
 
-However, this initial multivariate approach also presented certain limitations. Dichotomizing continuous outcomes, while simplifying interpretation, inherently discards a significant amount of information contained within the continuous (or ordered) scale. Furthermore, the choice of arbitrary or context-sensitive thresholds for dichotomization could potentially bias estimates or reduce the statistical power of the analysis. These limitations highlighted the need for a more granular examination of the continuous physiological parameters. This motivated the second step of the analysis: modeling each outcome as a continuous variable using individual linear regression models.
+```{r multivariate}
+# define dichotomized outcome variables
+multivar_data <- copy(poly)
+multivar_data[, `:=`(hypotension = as.integer(bp < 65),
+                     tachycardia = as.integer(hr > 100),
+                     acidosis = as.integer(lactate > 2),
+                     anemia = as.integer(hemoglobin < 70),
+                     coagulopathy = as.integer(inr >= 1.2),
+                     hypothermia = as.integer(temperature < 35),
+                     rhabdomyo = as.integer(ck > 950))]
+predictors <- c("gcs_cat", "bleeding", "fracture", "unconsciousness",
+                "brain_edema", "brain_compression", "concussion", "invasive")
+controls <- c("age_gen", "sex", "iss_cat", "severe_thoracic_injury")
+multivar_long <- melt(multivar_data, 
+                      id.vars = c("research_case_id", predictors, controls),
+                      measure.vars = c("hypotension", "tachycardia", "acidosis",
+                                       "anemia", "coagulopathy", "hypothermia", "rhabdomyo"), 
+                      value.name = "altered",
+                      variable.name = "pph")[!is.na(altered)]
+# define a variable for the pathophysiology dimension
+multivar_long[, pph_dim := case_when(
+  pph %in% c("anemia", "hypotension", "tachycardia", "acidosis") ~ "shock",
+  pph == "hypothermia" ~ "hypothermia",
+  pph == "rhabdomyo" ~ "softtissue",
+  pph == "coagulopathy" ~ "coagulopathy")]
+# Merge the "Brain Edema" and "Brain Compression" variables into a single 
+# "Severe brain injury" variable to avoid these too thinly populated classes.
+multivar_long[, severebrain := as.factor(as.integer(brain_edema == 1 | 
+                                                      brain_compression == 1))]
+# Fit the multivariate model
+model_multivar <- glmmTMB(altered ~ pph * (gcs_cat + age_gen + 
+                                             iss_cat + severe_thoracic_injury + sex + 
+                                             bleeding + fracture + concussion + severebrain + 
+                                             unconsciousness + invasive) +
+                            (1 | research_case_id),
+                          data = multivar_long,
+                          family = "binomial")
+
+# Function for calculation of coefficients by outcome
+coef_multivar <- function(model) {
+  coef1 <- summary(model)$coefficients$cond
+  colnames(coef1) <- c("est", "se", "z", "p")
+  coef1 <- as.data.frame(coef1) |> 
+    rownames_to_column(var = "variable")
+  # extract covariance matrix
+  cov1 <- summary(model)$vcov$cond
+  # extract indices belonging to hypotension
+  ind_hypotension <- which(1 == c(1, rep(0, 6), rep(1, 16)))
+  hypotension <- matrix(0, nrow = 1, ncol = nrow(coef1))
+  hypotensiondata <- data.frame(
+    index = factor(ind_hypotension, levels = 1:nrow(coef1)))
+  hypotensionmatrix <- model.matrix(~ -1 + index, data = hypotensiondata)
+  # extract all other dimensions
+  pph_dims <- setdiff(levels(multivar_long$pph), "hypotension")
+  pph_coefs <- lapply(pph_dims, function(dim) {
+    # dim <- "tachycardia"
+    ind <- which(grepl(dim, coef1$variable))
+    dimdata <- data.frame(index = factor(ind, levels = 1:nrow(coef1)))
+    dimmatrix <- model.matrix(~ -1 + index, data = dimdata) +
+      hypotensionmatrix
+    data.frame(variable = coef1$variable[ind_hypotension],
+               est = dimmatrix %*% coef1$est,
+               se = sqrt(diag(dimmatrix %*% cov1 %*% t(dimmatrix))),
+               dim = dim)
+  })
+  names(pph_coefs) <- pph_dims
+  pph_coefs$hypotension <- data.frame(variable = coef1$variable[ind_hypotension],
+                                      est = coef1$est[ind_hypotension],
+                                      se = coef1$se[ind_hypotension],
+                                      dim = "hypotension")
+  pph_coefs
+}
+# Function for plotting
+plot_multivar <- function(model, alpha = .05,
+                          orbreaks = c(.1, .5, 1, 2, 10, 20, 50),
+                          dimension_names = data.frame(
+                            dim = c("hypotension", "tachycardia", "anemia", "acidosis",
+                                    "coagulopathy", "hypothermia", "rhabdomyo"),
+                            dim_nice = c("Hypotension", "Tachycardia", "Anemia", "Hyperlactatemia",
+                                         "Coagulopathy", "Hypothermia", "Elevated Creatine Kinase")),
+                          ncol = 2,
+                          coef_names = data.frame(
+                            variable = c("gcs_cat.L", "gcs_cat.Q", "gcs_cat.C", 
+                                         "gcs_cat1.mild", "gcs_cat2.moderate", "gcs_cat3.severe",
+                                         "concussion1", "bleeding1", "fracture1", "severebrain1",
+                                         "unconsciousness1", "invasive1",
+                                         "iss_cat.L", "iss_cat.Q", "iss_cat.C", 
+                                         "iss_cat2.9-15", "iss_cat3.16-24", "iss_cat4.25+",
+                                         "severe_thoracic_injury1",
+                                         "age_gen.L", "age_gen.Q",
+                                         "age_gen2.40-69", "age_gen3.70<",
+                                         "sexm"),
+                            variable_nice = c("GCS category, linear", "GCS category, quadratic", "GCS category, cubic", 
+                                              "GCS 13-15", "GCS 9-12", "GCS \u22648",
+                                              "Concussion", "Intracranial bleeding",
+                                              "Skull fracture", "Severe brain injury",
+                                              "Loss of consciousness", "Invasive procedure",
+                                              "ISS category, linear", "ISS category, quadratic", "ISS category, cubic",
+                                              "ISS 9-15", "ISS 16-24", "ISS \u226525",
+                                              "Severe thoracic injury",
+                                              "Age category, linear", "Age category, quadratic",
+                                              "Age 40-69 years", "Age >\u200970 years",
+                                              "Male sex"))) {
+  coef_table <- coef_multivar(model)
+  coef_table_long <- rbindlist(coef_table) |> 
+    left_join(dimension_names, by = "dim") |>
+    left_join(coef_names, by = "variable") |>
+    mutate(dim_nice = factor(dim_nice, levels = dimension_names$dim_nice),
+           variable_nice = factor(variable_nice, levels = coef_names$variable_nice),
+           or = exp(est),
+           logor_l = (est - qnorm(1 - alpha / 2) * se),
+           logor_u = (est + qnorm(1 - alpha / 2) * se),
+           or_l = exp(logor_l),
+           or_u = exp(logor_u))
+  coef_table_long |> 
+    filter(variable != "(Intercept)") |> 
+    ggplot(aes(x = est, y = fct_rev(variable_nice))) +
+    geom_vline(xintercept = 0, linewidth = .5) +
+    geom_point(color = "darkblue", shape = "diamond") +
+    geom_errorbarh(aes(xmin = logor_l, xmax = logor_u), 
+                   height = 0, color = "darkblue") +
+    lemon::facet_rep_wrap(~ dim_nice, ncol = ncol,
+                          repeat.tick.labels = TRUE) +
+    scale_x_continuous(breaks = log(orbreaks), labels = orbreaks,
+                       limits = log(range(orbreaks))) +
+    labs(y = NULL, x = "Odds ratio (95% confidence interval)") +
+    lemon::coord_capped_cart(bottom = "both") +
+    theme_classic() +
+    theme(axis.line.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.text = element_text(color = "black"),
+          panel.grid.major.x = element_line(color = "darkgrey"))
+}
+plot_multivar(model_multivar)
+```
+
+
+However, this initial multivariate approach also presents certain limitations. Dichotomizing continuous outcomes, while simplifying interpretation, inherently discards a significant amount of information contained within the continuous (or ordered) scale. Furthermore, the choice of arbitrary or context-sensitive thresholds for dichotomization could potentially bias estimates or reduce the statistical power of the analysis. These limitations highlighted the need for a more granular examination of the continuous physiological parameters. This motivated the second step of the analysis: modeling each outcome as a continuous variable using individual linear regression models.
 
 ### 4.2 In-Depth Analysis: Individual Outcome Models
 
@@ -394,7 +537,7 @@ Each model was tailored based on preliminary findings from EDA and consideration
 
 | Outcome Variable | Applied Transformation | Robust Regression Used |
 | :------------------------- | :--------------------- | :--------------------- |
-| Systolic Blood Pressure | `sqrt()` | No |
+| MAP | `sqrt()` | No |
 | Heart Rate | `log()` | No |
 | Lactate | `^(-1/3)` | No |
 | Hemoglobin | `^2` | No |
@@ -439,6 +582,7 @@ This section presents the key findings from the individual models, detailing the
 # Define a helper function for plotting coefficients with nice names
 # This function is used to generate the coefficient plots included in the report.
 coefficient_plot <- function(model, outcome_name, plot_color = "darkblue", alpha =.05, x_breaks,
+                             backtrans = identity,
                              coef_names = data.frame(
                                variable = c("gcs_cat.L", "gcs_cat.Q", "gcs_cat.C", "concussion1",
                                             "bleeding1", "fracture1", "brain_edema1",
@@ -478,6 +622,11 @@ coefficient_plot <- function(model, outcome_name, plot_color = "darkblue", alpha
     mutate(cil = Estimate - qt(p = alpha / 2, df = model$df.residual) * `Std. Error`,
            ciu = Estimate + qt(p = alpha / 2, df = model$df.residual) * `Std. Error`,
            variable_nice = factor(variable_nice, levels = coef_names$variable_nice))
+  
+  # apply backtransformation
+  model_coefs <- model_coefs |> 
+    mutate_at(.vars = c("Estimate", "cil", "ciu"),
+              .fun = backtrans)
   
   model_coefs |>
     ggplot(aes(x = Estimate, y = fct_rev(variable_nice))) +
@@ -521,27 +670,93 @@ As shown in Table 4, the adjusted R-squared values for the linear models vary ac
 plot(fm_temp_final, which = 3)
 ```
 
-### 5.2 Impact on Shock Pathophysiology (Systolic Blood Pressure, Heart Rate, Lactate, Hemoglobin)
+### 5.2 Impact on Shock Pathophysiology (Mean Arterial Pressure, Heart Rate, Lactate, Hemoglobin)
 
 The analysis of shock-related parameters consistently revealed significant associations with TBI severity.
 
-**Systolic Blood Pressure:**
+** Mean Arterial Pressure:**
 
-The model for Blood Pressure (transformed using a square root) indicated that as GCS severity decreased (i.e., GCS score improved, variable `GCS category` decreased from "3.severe" towards "1.mild"), the square root of blood pressure generally increased. This means less severe TBI is associated with higher blood pressure. Higher ISS and severe thoracic injury were associated with lower blood pressure.
+For this model, we used a square root transformation and removed `r nrow(poly[bp == 0])` observations with (non-physiological) MAP equal to zero.
 
-*TODO: Include Coef Plot & Describe what's happening / check what I quickly rapped here!!!*
+```{r coef-plot-map}
+map_nona <- poly |>
+  filter(!is.na(bp) &
+           bp != 0)
+fm_map_final <- lm(sqrt(bp) ~ gcs_cat + iss_cat + 
+                     gcs_cat:iss_cat + gcs_cat:age_gen + iss_cat:age_gen +
+                     age_gen + severe_thoracic_injury + sex +
+                     bleeding + fracture + concussion + brain_edema +
+                     brain_compression + unconsciousness,
+                   data = map_nona)
+coefficient_plot(model = fm_map_final, 
+                 outcome_name = "sqrt(MAP)",
+                 x_breaks = (-3:3)/5)
+```
+
+The model for MAP (transformed using a square root) indicated that as GCS severity increased (i.e., GCS score category progressed from "mild" to "moderate" and "severe"), the square root of MAP generally decreased. This means more severe TBI is associated with lower MAP. Higher ISS and severe thoracic injury were also associated with lower MAP. Higher MAP values were also significantly associated with male sex and with higher age, possibly reflecting physiological differences unrelated to trauma. This model also included three significant interactions: Between ISS and GCS category, between GCS category and age, and between ISS and age. In particular, these interactions suggest that the relationship between GCS severity and MAP varies depending on the patient's overall injury severity (ISS) and age group.
+
+
 
 **Heart Rate:**
 
-*TODO: Include Coef Plot & Describe what's happening!*
+For this model, we used a log transformation. In order to enable this transformation, we removed `r nrow(poly[hr == 0])` observations with (non-physiological) heart rate values of zero.
+
+```{r coef-plot-hr}
+hr_nona <- poly |>
+  filter(!is.na(hr) & 
+           hr != 0)
+fm_hr_final <- lm(log(hr) ~ gcs_cat + iss_cat +
+                    age_gen:iss_cat + gcs_cat:age_gen +
+                    age_gen + severe_thoracic_injury + sex +
+                    bleeding + fracture + concussion + brain_edema +
+                    brain_compression + unconsciousness,
+                  data = hr_nona)
+coefficient_plot(fm_hr_final, x_breaks = seq(.8, 1.2, by = .1),
+                 backtrans = exp,
+                 outcome_name = "Heart Rate (Multiplicative)")
+```
+
+Note that with the log transformation, the estimated model coefficients can be interpreted in a multiplicative manner (similar to the interpretation of rate ratios in count regression models). Higher heart rates showed significant associations with increasing GCS severity and with the presence of brain edema. Interestingly, the association between heart rate and loss of consciousness was negative. In addition, there was a significant association of higher heart rate with ISS and with younger age. This model contained two significant interactions: Between GCS and age and between ISS and age. In particular, this suggests that the relationship between GCS severity and heart rate varies depending on the patient's age group.
+
 
 **Lactate:**
 
-*TODO: Include Coef Plot & Describe what's happening*
+The model for lactate used an inverse cubic root transformation. In order to enable this transformation, we removed `r nrow(poly[lactate == 0])` observations with (non-physiological) lactate values of zero. 
+
+```{r coef-plot-lac}
+lac_nona <- poly |>
+  filter(!is.na(lactate) & 
+           lactate != 0)
+fm_lac_final <- lm(lactate^(-1/3) ~ gcs_cat + iss_cat +
+                     age_gen + severe_thoracic_injury + sex +
+                     bleeding + fracture + concussion + brain_edema +
+                     brain_compression + unconsciousness,
+                   data = lac_nona)
+coefficient_plot(model = fm_lac_final, 
+                 outcome_name = "Lactate^(-1/3)",
+                 x_breaks = seq(-.1, .1, by = .02))
+```
+
+In the coefficient plot, estimates to the left side of the vertical zero axis suggest a positive association between the respective covariate and lactate levels (due to the minus sign in the power transformation). The results indicate that as GCS severity increased (i.e., GCS score worsened), the lactate levels increased, suggesting that more severe TBI is associated with higher lactate levels. We also observed significant associations with concussion, loss of consciousness, severe thoracic injury, and male sex.
+
 
 **Hemoglobin:**
 
-*TODO: Include Coef Plot & Describe what's happening*
+```{r coef-plot-hb}
+hgb_nona <- poly |>
+  filter(!is.na(hemoglobin))
+fm_hgb_final <- lm(hemoglobin^2 ~ gcs_cat + iss_cat * age_gen + 
+                     severe_thoracic_injury + sex +
+                     bleeding + fracture + concussion + brain_edema +
+                     brain_compression + unconsciousness,
+                   data = hgb_nona)
+coefficient_plot(fm_hgb_final, 
+                 x_breaks = seq(-5000, 5000, by = 1000),
+                 outcome_name = "Hemoglobin^2")
+```
+
+In the model for hemoglobin levels, higher GCS severity (i.e., lower GCS scores) was associated with lower hemoglobin levels, indicating that more severe TBI is associated with more severe anemia. The model also revealed significantly higher hemoglobin levels with younger age and male sex, most likely reflecting physiological sex- and age-related differences not related to trauma. In addition, we observed significantly lower hemoglobin levels with increasing ISS and with presence of severe thoracic injury. This model also included a significant interaction term between ISS and age, suggesting that the association of ISS with hemoglobin levels varies by age group.
+
 
 ### 5.3 Impact on Coagulopathy (Quick)
 
@@ -659,28 +874,81 @@ Furthermore, integrating more detailed information on specific interventions wou
 
 ### GLMM Model:
 ```{r glmm_output}
-# 
+# Final multivariate logistic regression model for pathophysiology alterations.
+# This model includes an interaction between the kind of pathophysiology outcome
+# and all other model covariates, so that it becomes equivalent to fitting one
+# separate logistic regression model for each outcome.
+summary(model_multivar)
 ```
 
 ### Individual Models: Shock
 Lactate:
 ```{r lactate_output}
-# 
+# Final model for lactate (inverse-cubic-root-transformed).
+# This model includes no interaction terms.
+# Classical linear model (lm) was chosen over robust regression (lmrob)
+# as coefficient estimates were stable, indicating outliers did not
+# disproportionately influence the results for lactate.
+summary(fm_lac_final)
+
+# Diagnostic plots for the final lactate model
+# These plots help assess model assumptions (linearity, normality of residuals, homoscedasticity).
+par(mfrow = c(2, 2))
+plot(fm_lac_final)
+par(mfrow = c(1, 1))
 ```
 
 Hemoglobin:
 ```{r hemoglobin_output}
-# 
+# Final model for hemoglobin (square-transformed).
+# This model includes an interaction between age_gen and iss_cat,
+# which was found to be statistically significant after ANOVA comparison.
+# Classical linear model (lm) was chosen over robust regression (lmrob)
+# as coefficient estimates were stable, indicating outliers did not
+# disproportionately influence the results for hemoglobin
+summary(fm_hgb_final)
+
+# Diagnostic plots for the final hemoglobin model
+# These plots help assess model assumptions (linearity, normality of residuals, homoscedasticity).
+par(mfrow = c(2, 2))
+plot(fm_hgb_final)
+par(mfrow = c(1, 1))
 ```
 
 Blood Pressure:
 ```{r bp_output}
-# 
+# Final model for MAP (square-root-transformed).
+# This model includes an interaction between age_gen and iss_cat and between
+# gcs_cat and iss_cat, which were found to be statistically significant after 
+# ANOVA comparison.
+# Classical linear model (lm) was chosen over robust regression (lmrob)
+# as coefficient estimates were stable, indicating outliers did not
+# disproportionately influence the results for MAP.
+summary(fm_map_final)
+
+# Diagnostic plots for the final MAP model
+# These plots help assess model assumptions (linearity, normality of residuals, homoscedasticity).
+par(mfrow = c(2, 2))
+plot(fm_map_final)
+par(mfrow = c(1, 1))
 ```
 
 Heart Rate:
 ```{r hr_output}
-# 
+# Final model for heart rate (log-transformed).
+# This model includes an interaction between age_gen and iss_cat and between
+# gcs_cat and iss_cat, which were found to be statistically significant after
+# ANOVA comparison.
+# Classical linear model (lm) was chosen over robust regression (lmrob)
+# as coefficient estimates were stable, indicating outliers did not
+# disproportionately influence the results for heart rate.
+summary(fm_hr_final)
+
+# Diagnostic plots for the final heart rate model
+# These plots help assess model assumptions (linearity, normality of residuals, homoscedasticity).
+par(mfrow = c(2, 2))
+plot(fm_hr_final)
+par(mfrow = c(1, 1))
 ```
 
 ### Individual Models: Coagulopathy
@@ -782,3 +1050,4 @@ We found the modeling phase productive and well-coordinated. However, during dat
 
 * Improving the division of tasks during the data cleaning stage to address similar issues more efficiently
 
+## References

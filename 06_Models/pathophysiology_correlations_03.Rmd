@@ -1,0 +1,460 @@
+---
+title: "Model for the Correlations between Pathophysiology Dimensions"
+output: html_document
+date: "2025-06-26"
+author: jaegerl
+bibliography: models_references.bib
+csl: vancouver
+---
+
+```{r setup, include=FALSE}
+# define paths
+# for data import
+import_path <- "02_data/01_raw_data/"
+# for export of inspection objects (spreadsheets)
+inspect_path <- "03_spreadsheets/"
+# for export of clean data
+clean_path <- "02_data/02_clean_data/"
+# for intermediate results
+intermediate_path <- "02_data/03_dump/"
+# for tables
+table_path <- "04_tables/"
+# for figures
+figure_path <- "07_Figures/"
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(data.table)
+library(rio)
+library(tableone)
+library(vcd)
+library(glmmTMB)
+library(lme4)
+library(MASS)
+library(tidyverse)
+library(sfsmisc)
+library(robustbase)
+
+# knitr::opts_knit$set(root.dir = normalizePath(".."))
+```
+
+
+## Prepare Data
+
+```{r data1}
+poly <- readRDS(paste0(clean_path, "population_poly.rds"))
+# severe thoracic injury
+poly[, severe_thoracic_injury := as.factor(as.integer(Thorax >= 3))]
+poly[is.na(severe_thoracic_injury), severe_thoracic_injury := "0"]
+# make injuries to factors
+poly[, `:=`(bleeding = as.factor(bleeding),
+            fracture = as.factor(fracture),
+            concussion = as.factor(concussion),
+            brain_edema = as.factor(brain_edema),
+            brain_compression = as.factor(brain_compression),
+            unconsciousness = as.factor(unconsciousness))]
+# remove implausible values
+poly[hr > 500, hr := NA]
+poly[hr == 0, hr := NA]
+poly[bp == 0, bp := NA]
+# re-define age categories
+poly[, age_gen := case_when(age_cat %in% c("1.<30", "2.30-39") ~ "1.<40",
+                            age_cat %in% c("3.40-49", "4.50-59", "5.60-69") ~ "2.40-69",
+                            age_cat %in% c("6.70-78", "7.79+") ~ "3.70<") |> 
+       factor(levels = c("1.<40", "2.40-69", "3.70<"), 
+              ordered = TRUE)]
+```
+
+We first visualize the different patient populations involved in a Venn diagram.
+
+```{r venn}
+pop <- readRDS(paste0(clean_path, "population.rds"))
+venndata <- pop[, .(Polytrauma = as.numeric(polytrauma) - 1,
+                    TBI = as.numeric(tbi) - 1,
+                    All = 1)]
+colnames(venndata) <- paste0(colnames(venndata), " (",
+                             colSums(venndata), ")")
+library(eulerr)
+vennfit <- euler(venndata)
+plot(vennfit, quantities = TRUE, 
+     fills = c("darkgray", "steelblue", "white"),
+     labels = FALSE, legend = TRUE,
+     edges = list(col = "black", lwd = 2))
+```
+
+In the following, we attempt to model severe alterations in the different pathophysiology dimensions simultaneously. For each pathophysiology outcome, we define a binary outcome variable denoting whether the respective dimensions experiences a major alteration, using values from the literature on polytrauma pathophysiology [@pape_2022; @cecconi_2014; @kodadek_2022; @atls_2018; @pape_2014; @rossaint_2023]. Note that for creatine kinase, a cutoff of 950 U/L is used, corresponding to five times the upper reference limit of 190 U/L reported in the laboratory dataset.
+
+```{r data2}
+poly[, `:=`(hypotension = as.integer(bp < 65),
+            tachycardia = as.integer(hr > 100),
+            acidosis = as.integer(lactate > 2),
+            anemia = as.integer(hemoglobin < 70),
+            coagulopathy = as.integer(inr >= 1.2),
+            hypothermia = as.integer(temperature < 35),
+            rhabdomyo = as.integer(ck > 950))]
+```
+
+
+
+## Multivariate Mixed-Effects Logistic Regression for Severe Pathophysiology Alterations
+
+The model structure is as follows: Let $y_{ij}$ be the binary outcome of major pathophysiological alteration for patient $i$ and dimension $j$. We assume $y_{ij} \vert x_i, u_i \sim \text{Ber}(p_{ij})$, where $p_{ij} = \text{logit}^{-1}(\beta_j^T x_i + u_i)$. Here, $\beta_j$ are the fixed-effect coefficients for the covariates $x_i$ and $u_i$ are random effects, which are assumed to be iid realizations of a $N(0, \sigma^2)$ with unknown $\sigma > 0$.
+
+We may also provide a more interpretable version by treating the individual categorical variables as non-ordered factors.
+
+
+### Ordered Factors
+
+```{r multivar1}
+predictors <- c("gcs_cat", "bleeding", "fracture", "unconsciousness",
+                "brain_edema", "brain_compression", "concussion", "invasive")
+controls <- c("age_gen", "sex", "iss_cat", "severe_thoracic_injury")
+poly_long <- melt(poly, 
+                  id.vars = c("research_case_id", predictors, controls),
+                  measure.vars = c("hypotension", "tachycardia", "acidosis",
+                                   "anemia", "coagulopathy", "hypothermia", "rhabdomyo"), 
+                  value.name = "altered",
+                  variable.name = "pph")[!is.na(altered)]
+# define a variable for the pathophysiology dimension
+poly_long[, pph_dim := case_when(
+  pph %in% c("anemia", "hypotension", "tachycardia", "acidosis") ~ "shock",
+  pph == "hypothermia" ~ "hypothermia",
+  pph == "rhabdomyo" ~ "softtissue",
+  pph == "coagulopathy" ~ "coagulopathy")]
+poly_long[, severebrain := as.factor(as.integer(brain_edema == 1 | 
+                                                  brain_compression == 1))]
+model1 <- glmmTMB(altered ~ pph * (gcs_cat + age_gen + 
+                                     iss_cat + severe_thoracic_injury + sex + 
+                                     bleeding + fracture + concussion + severebrain + 
+                                     unconsciousness + invasive) +
+                    (1 | research_case_id),
+                  data = poly_long,
+                  family = "binomial")
+
+# function for calculation of coefficients by outcome
+coef_multivar <- function(model) {
+  # extract coefficients
+  coef1 <- summary(model)$coefficients$cond
+  colnames(coef1) <- c("est", "se", "z", "p")
+  coef1 <- as.data.frame(coef1) |> 
+    rownames_to_column(var = "variable")
+  # extract covariance matrix
+  cov1 <- summary(model)$vcov$cond
+  # extract indices belonging to hypotension
+  ind_hypotension <- which(1 == c(1, rep(0, 6), rep(1, 16)))
+  hypotension <- matrix(0, nrow = 1, ncol = nrow(coef1))
+  hypotensiondata <- data.frame(
+    index = factor(ind_hypotension, levels = 1:nrow(coef1)))
+  hypotensionmatrix <- model.matrix(~ -1 + index, data = hypotensiondata)
+  # extract all other dimensions
+  pph_dims <- setdiff(levels(poly_long$pph), "hypotension")
+  pph_coefs <- lapply(pph_dims, function(dim) {
+    # dim <- "tachycardia"
+    ind <- which(grepl(dim, coef1$variable))
+    dimdata <- data.frame(index = factor(ind, levels = 1:nrow(coef1)))
+    dimmatrix <- model.matrix(~ -1 + index, data = dimdata) +
+      hypotensionmatrix
+    data.frame(variable = coef1$variable[ind_hypotension],
+               est = dimmatrix %*% coef1$est,
+               se = sqrt(diag(dimmatrix %*% cov1 %*% t(dimmatrix))),
+               dim = dim)
+  })
+  names(pph_coefs) <- pph_dims
+  pph_coefs$hypotension <- data.frame(variable = coef1$variable[ind_hypotension],
+                                      est = coef1$est[ind_hypotension],
+                                      se = coef1$se[ind_hypotension],
+                                      dim = "hypotension")
+  pph_coefs
+}
+
+# function for plotting
+plot_multivar <- function(model, alpha = .05,
+                          orbreaks = c(.1, .5, 1, 2, 10, 20, 50),
+                          ncol = 2,
+                          dimension_names = data.frame(
+                            dim = c("hypotension", "tachycardia", "anemia", "acidosis",
+                                    "coagulopathy", "hypothermia", "rhabdomyo"),
+                            dim_nice = c("Hypotension", "Tachycardia", "Anemia", "Hyperlactatemia",
+                                         "Coagulopathy", "Hypothermia", "Elevated Creatine Kinase")),
+                          coef_names = data.frame(
+                            variable = c("gcs_cat.L", "gcs_cat.Q", "gcs_cat.C", 
+                                         "gcs_cat1.mild", "gcs_cat2.moderate", "gcs_cat3.severe",
+                                         "concussion1", "bleeding1", "fracture1", "severebrain1",
+                                         "unconsciousness1", "invasive1",
+                                         "iss_cat.L", "iss_cat.Q", "iss_cat.C", 
+                                         "iss_cat2.9-15", "iss_cat3.16-24", "iss_cat4.25+",
+                                         "severe_thoracic_injury1",
+                                         "age_gen.L", "age_gen.Q",
+                                         "age_gen2.40-69", "age_gen3.70<",
+                                         "sexm"),
+                            variable_nice = c("GCS category, linear", "GCS category, quadratic", "GCS category, cubic", 
+                                              "GCS 13-15", "GCS 9-12", "GCS \u22648",
+                                              "Concussion", "Intracranial bleeding",
+                                              "Skull fracture", "Severe brain injury",
+                                              "Loss of consciousness", "Invasive procedure",
+                                              "ISS category, linear", "ISS category, quadratic", "ISS category, cubic",
+                                              "ISS 9-15", "ISS 16-24", "ISS \u226525",
+                                              "Severe thoracic injury",
+                                              "Age category, linear", "Age category, quadratic",
+                                              "Age 40-69 years", "Age >\u200970 years",
+                                              "Male sex"))) {
+  coef_table <- coef_multivar(model)
+  coef_table_long <- rbindlist(coef_table) |> 
+    left_join(dimension_names, by = "dim") |>
+    left_join(coef_names, by = "variable") |>
+    mutate(dim_nice = factor(dim_nice, levels = dimension_names$dim_nice),
+           variable_nice = factor(variable_nice, levels = coef_names$variable_nice),
+           or = exp(est),
+           logor_l = (est - qnorm(1 - alpha / 2) * se),
+           logor_u = (est + qnorm(1 - alpha / 2) * se),
+           or_l = exp(logor_l),
+           or_u = exp(logor_u))
+  coef_table_long |> 
+    filter(variable != "(Intercept)") |> 
+    ggplot(aes(x = est, y = fct_rev(variable_nice))) +
+    geom_vline(xintercept = 0, linewidth = .5) +
+    geom_point(color = "darkblue", shape = "diamond") +
+    geom_errorbarh(aes(xmin = logor_l, xmax = logor_u), 
+                   height = 0, color = "darkblue") +
+    lemon::facet_rep_wrap(~ dim_nice, ncol = ncol,
+                          repeat.tick.labels = TRUE) +
+    scale_x_continuous(breaks = log(orbreaks), labels = orbreaks,
+                       limits = log(range(orbreaks))) +
+    labs(y = NULL, x = "Odds ratio (95% confidence interval)") +
+    lemon::coord_capped_cart(bottom = "both") +
+    theme_classic() +
+    theme(axis.line.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.text = element_text(color = "black"),
+          panel.grid.major.x = element_line(color = "darkgrey"))
+}
+
+(plot_multivar_ordered <- plot_multivar(model1, orbreaks = c(.1, .5, 1, 5, 10, 50, 100)))
+ggsave(plot_multivar_ordered, width = 400, height = 200, units = "mm",
+       file = paste0(figure_path, "plot_multivar_ordered.png"))
+```
+
+
+
+### Unordered Factors
+
+Here, we provide a more interpretable alternative by treating the individual categorical variables as non-ordered factors. This allows to interpret the coefficients of the individual categories directly, rather than as linear or polynomial effects. The factor variables of interest are age, ISS, and GCS category.
+
+```{r multivar2}
+poly_long_unordered <- copy(poly_long)
+poly_long_unordered[, `:=`(gcs_cat = factor(gcs_cat, ordered = FALSE),
+                           iss_cat = factor(iss_cat, ordered = FALSE),
+                           age_gen = factor(age_gen, ordered = FALSE))]
+model2 <- glmmTMB(altered ~ pph * (gcs_cat + age_gen + 
+                                     iss_cat + severe_thoracic_injury + sex + 
+                                     bleeding + fracture + concussion + severebrain + 
+                                     unconsciousness + invasive) +
+                    (1 | research_case_id),
+                  data = poly_long_unordered,
+                  family = "binomial")
+(plot_multivar_unordered <- plot_multivar(model2, 
+                                          orbreaks = c(.1,.2,.5, 1,2,5, 10,100,500,1000)))
+ggsave(plot_multivar_unordered, width = 400, height = 200, units = "mm",
+       file = paste0(figure_path, "plot_multivar_unordered.png"))
+```
+
+In an additional plot, we compare the coefficients estimated from the two models for the individual binary covariates other than the ordered/unordered factors.
+
+```{r multivar_compare}
+coef_ordered <- coef_multivar(model1)
+coef_unordered <- coef_multivar(model2)
+coef_compare <- rbind(
+  rbindlist(coef_ordered) |> 
+    mutate(model = "Ordered factors"),
+  rbindlist(coef_unordered) |> 
+    mutate(model = "Unordered factors")) |> 
+  filter(!grepl(variable, pattern = "\\.[LQC]")) |> 
+  filter(variable != "(Intercept)") |> 
+  left_join(data.frame(
+    dim = c("hypotension", "tachycardia", "anemia", "acidosis",
+            "coagulopathy", "hypothermia", "rhabdomyo"),
+    dim_nice = c("Hypotension", "Tachycardia", "Anemia", "Hyperlactatemia",
+                 "Coagulopathy", "Hypothermia", "Elevated Creatine Kinase")),
+    by = "dim") |> 
+  left_join(data.frame(
+    variable = c("concussion1", "bleeding1", "fracture1", "severebrain1",
+                 "unconsciousness1", "invasive1",
+                 "severe_thoracic_injury1",
+                 "sexm"),
+    variable_nice = c("Concussion", "Intracranial bleeding",
+                      "Skull fracture", "Severe brain injury",
+                      "Loss of consciousness", "Invasive procedure",
+                      "Severe thoracic injury",
+                      "Male sex")),
+    by = "variable") |> 
+  drop_na(variable_nice)
+(coef_compare_plot <- coef_compare |> 
+    mutate(logor_l = (est - qnorm(1 - .05 / 2) * se),
+           logor_u = (est + qnorm(1 - .05 / 2) * se)) |> 
+    ggplot(aes(x = est, y = fct_rev(variable_nice),
+               color = model, shape = model)) +
+    geom_vline(xintercept = 0, linewidth = .5) +
+    geom_point(alpha = .5) +
+    lemon::facet_rep_wrap(~ dim_nice, nrow = 2,
+                          repeat.tick.labels = TRUE) +
+    labs(y = NULL, x = "Odds ratio (95% confidence interval)",
+         color = "Model", shape = "Model") +
+    lemon::coord_capped_cart(bottom = "both") +
+    theme_classic() +
+    theme(axis.line.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.text = element_text(color = "black"),
+          panel.grid.major.x = element_line(color = "darkgrey")))
+ggsave(coef_compare_plot, width = 400, height = 180, units = "mm",
+       file = paste0(figure_path, "coef_compare.png"))
+```
+
+We see that the choice of unordered vs. ordered factors does not relevantly affect the coefficient estimates for the remaining model covariates.
+
+
+## Models for the Presence of Measurements
+
+This multivariate model allowed to consider all cases regardless of whether all parameters belonging to the individual pathophysiology dimensions were present or not. In particular, a considerable proportion of measurements of lactate, creatinine kinase, and INR were missing, as shown in the following table:
+
+```{r missings}
+outcomes <- c("hr", "bp", "hemoglobin", "lactate", "inr", "ck", "temperature")
+CreateTableOne(data = poly |> 
+                 mutate_at(.vars = outcomes,
+                           .funs = \(x) as.character(is.na(x))),
+               vars = outcomes) |> 
+  print(noSpaces = TRUE)
+```
+
+In the following, we will model the associations between the various clinical characteristics and the presence of a measurement of each of lactate, creatine kinase, and INR using logistic regression models.
+
+### Lactate
+
+```{r lac_miss1}
+measured <- copy(poly)
+measured[, `:=`(lac_measured = as.numeric(!is.na(lactate)),
+                ck_measured = as.numeric(!is.na(ck)),
+                inr_measured = as.numeric(!is.na(inr)))]
+measured[, severebrain := as.factor(as.integer(brain_edema == 1 | brain_compression == 1))]
+measured_unordered <- copy(measured)
+measured_unordered[, `:=`(iss_cat = factor(iss_cat, ordered = FALSE),
+                          gcs_cat = factor(gcs_cat, ordered = FALSE),
+                          age_gen = factor(age_gen, ordered = FALSE))]
+lac_meas_unordered <- glm(lac_measured ~ gcs_cat + age_gen + 
+                            iss_cat + severe_thoracic_injury + sex + 
+                            bleeding + fracture + concussion + severebrain + 
+                            unconsciousness,
+                          family = "binomial",
+                          data = measured_unordered)
+lac_meas_ordered <- glm(lac_measured ~ gcs_cat + age_gen + 
+                          iss_cat + severe_thoracic_injury + sex + 
+                          bleeding + fracture + concussion + severebrain + 
+                          unconsciousness,
+                        family = "binomial",
+                        data = measured)
+
+# function for nice plotting
+plot_missing <- function(model, alpha = .05,
+                         orbreaks = c(.5, 1, 2, 5, 10, 20),
+                         coef_names = data.frame(
+                           variable = c("gcs_cat.L", "gcs_cat.Q", "gcs_cat.C", 
+                                        "gcs_cat1.mild", "gcs_cat2.moderate", "gcs_cat3.severe",
+                                        "concussion1", "bleeding1", "fracture1", "severebrain1",
+                                        "unconsciousness1", "invasive1",
+                                        "iss_cat.L", "iss_cat.Q", "iss_cat.C", 
+                                        "iss_cat2.9-15", "iss_cat3.16-24", "iss_cat4.25+",
+                                        "severe_thoracic_injury1",
+                                        "age_gen.L", "age_gen.Q",
+                                        "age_gen2.40-69", "age_gen3.70<",
+                                        "sexm"),
+                           variable_nice = c("GCS category, linear", "GCS category, quadratic", "GCS category, cubic", 
+                                             "GCS 13-15", "GCS 9-12", "GCS \u22648",
+                                             "Concussion", "Intracranial bleeding",
+                                             "Skull fracture", "Severe brain injury",
+                                             "Loss of consciousness", "Invasive procedure",
+                                             "ISS category, linear", "ISS category, quadratic", "ISS category, cubic",
+                                             "ISS 9-15", "ISS 16-24", "ISS \u226525",
+                                             "Severe thoracic injury",
+                                             "Age category, linear", "Age category, quadratic",
+                                             "Age 40-69 years", "Age >\u200970 years",
+                                             "Male sex")),
+                         outcome) {
+  coef_miss <- summary(model)$coefficients |> 
+    data.frame(check.names = FALSE) |> 
+    rownames_to_column(var = "variable") |> 
+    filter(variable != "(Intercept)") |> 
+    mutate(OR = exp(Estimate),
+           logor_cil = Estimate - qnorm(1 - alpha / 2) * `Std. Error`,
+           logor_ciu = Estimate + qnorm(1 - alpha / 2) * `Std. Error`)
+  coef_miss |> 
+    left_join(coef_names, by = "variable") |> 
+    mutate(variable_nice = factor(variable_nice,
+                                  levels = coef_names$variable_nice)) |> 
+    ggplot(aes(x = Estimate, y = fct_rev(variable_nice))) +
+    geom_vline(xintercept = 0) +
+    geom_point(col = "darkblue") +
+    geom_errorbarh(aes(xmin = logor_cil, xmax = logor_ciu), 
+                   height = 0, col = "darkblue") +
+    scale_x_continuous(breaks = log(orbreaks),
+                       labels = orbreaks,
+                       limits = log(range(orbreaks)) )+
+    theme_classic() +
+    labs(y = NULL, x = "Odds ratio (95% confidence interval)",
+         title = paste0("Presence of ", outcome, " Levels")) +
+    lemon::coord_capped_cart(bottom = "both") +
+    theme(axis.line.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.text = element_text(color = "black"),
+          panel.grid.major.x = element_line(color = "darkgrey"))
+}
+
+plot_missing(lac_meas_ordered, orbreaks = c(.5, 1, 2, 5, 10, 20),
+             outcome = "Lactate")
+plot_missing(lac_meas_unordered, orbreaks = c(.5, 1, 2, 5, 10, 20),
+             outcome = "Lactate")
+```
+
+### Creatine Kinase
+
+```{r ck_miss1}
+ck_meas_unordered <- glm(ck_measured ~ gcs_cat + age_gen + 
+                           iss_cat + severe_thoracic_injury + sex + 
+                           bleeding + fracture + concussion + severebrain + 
+                           unconsciousness,
+                         family = "binomial",
+                         data = measured_unordered)
+ck_meas_ordered <- glm(ck_measured ~ gcs_cat + age_gen + 
+                         iss_cat + severe_thoracic_injury + sex + 
+                         bleeding + fracture + concussion + severebrain + 
+                         unconsciousness,
+                       family = "binomial",
+                       data = measured)
+
+plot_missing(ck_meas_ordered, orbreaks = c(.2, .5, 1, 2, 5, 10, 20, 50),
+             outcome = "Creatine Kinase")
+plot_missing(ck_meas_unordered, orbreaks = c(.2, .5, 1, 2, 5, 10, 20, 50),
+             outcome = "Creatine Kinase")
+```
+
+### INR
+
+```{r inr_miss1}
+inr_meas_unordered <- glm(inr_measured ~ gcs_cat + age_gen + 
+                            iss_cat + severe_thoracic_injury + sex + 
+                            bleeding + fracture + concussion + severebrain + 
+                            unconsciousness,
+                          family = "binomial",
+                          data = measured_unordered)
+inr_meas_ordered <- glm(inr_measured ~ gcs_cat + age_gen + 
+                          iss_cat + severe_thoracic_injury + sex + 
+                          bleeding + fracture + concussion + severebrain + 
+                          unconsciousness,
+                        family = "binomial",
+                        data = measured)
+
+plot_missing(inr_meas_ordered, orbreaks = c(.2, .5, 1, 2, 5),
+             outcome = "INR")
+plot_missing(inr_meas_unordered, orbreaks = c(.2, .5, 1, 2, 5),
+             outcome = "INR")
+```
+
+## References
