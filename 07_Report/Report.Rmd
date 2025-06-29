@@ -41,7 +41,7 @@ library(kableExtra)
 ## ---- Load data & Initial Preparation ----
 ```{r load-data, echo=TRUE}
 # Go one level up in the folder structure (otherwise in 07_Report)
-# setwd("..")
+setwd("..")
 
 # Define path to cleaned data
 clean_path <- "02_data/02_clean_data/"
