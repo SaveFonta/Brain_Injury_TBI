@@ -872,6 +872,7 @@ However, this initial multivariate approach also presents certain limitations. D
 The transition to individual linear regression models for each outcome variable allowed for a more detailed and nuanced analysis, fully leveraging the continuous nature of the physiological measurements. This approach further enabled the tailoring of each model to the specific characteristics of its respective physiological dimension.
 
 The general structure of these individual regression models typically included:
+
 * **Predictors of interest:** The GCS as a measure of TBI severity, alongside binary indicators for specific brain injury types (i.e., concussion, bleeding, fracture, loss of consciousness, brain edema, brain compression). 
 
 * **Control variables:** Age, sex, the ISS to account for overall polytrauma severity, and AIS Thorax to control for the impact of severe thoracic injuries.
@@ -907,7 +908,7 @@ fm_quick_final <- lm(quick^2 ~ gcs_cat + age_gen * iss_cat + severe_thoracic_inj
 
 Many variables frequently exhibit extreme values or potential outliers. Classical OLS regression models are highly sensitive to such extreme values; even a few outliers can potentially lead to distorted or misleading conclusions.
 
-To counter this susceptibility and ensure the reliability of the model estimates, **robust regression** methods were used. Specifically, the `lmrob()` function from the `robustbase` package in R was utilized [@maechler_2024]. The effectiveness of robust regression was systematically assessed for each linear model. This involved a direct comparison of the coefficients obtained from `lm()` (classical OLS from the `base` package) with those from `lmrob()` (robust regression). The analysis specifically checked whether the estimated coefficients changed meaningfully between the two methods (see plot below). Furthermore, `lmrob()` provides insights into its internal workings by assigning weights to each observation in the model summary; observations identified as influential outliers are assigned lower weights, effectively reducing their impact on the parameter estimates. If the robust regression analysis revealed substantial changes in coefficient estimates or clearly identified influential outliers (classified as outliers in the summary output, see below) that altered the interpretation of the relationships, the output from `lmrob()` was retained and reported as the primary result. Conversely, if the coefficients remained stable and no data points were classified as outliers, the `lm()` estimates were reported for simplicity and ease of interpretation. Note that we could have used the outputs from `lmrob()` for all models, since the interpretation essentially remains the same. However, we decided to differentiate between models where robust regression is necessary and models where it would merely produce the same results as OLS to emphasize their difference. As a general learning (mainly for us) was to always use (or at least check with) `lmrob()`, since the results are similar in the best case and more reliable in the worst case.
+To counter this susceptibility and ensure the reliability of the model estimates, **robust regression** methods were used. Specifically, the `lmrob()` function from the `robustbase` package in R was utilized [@maechler_2024]. The effectiveness of robust regression was systematically assessed for each linear model. This involved a direct comparison of the coefficients obtained from `lm()` (classical OLS from the `base` package) with those from `lmrob()` (robust regression). The analysis specifically checked whether the estimated coefficients changed meaningfully between the two methods. Furthermore, `lmrob()` provides insights into its internal workings by assigning weights to each observation in the model summary; observations identified as influential outliers are assigned lower weights, effectively reducing their impact on the parameter estimates. If the robust regression analysis revealed substantial changes in coefficient estimates or clearly identified influential outliers (classified as outliers in the summary output, see below) that altered the interpretation of the relationships, the output from `lmrob()` was retained and reported as the primary result. Conversely, if the coefficients remained stable and no data points were classified as outliers, the `lm()` estimates were reported for simplicity and ease of interpretation. Note that we could have used the outputs from `lmrob()` for all models, since the interpretation essentially remains the same. However, we decided to differentiate between models where robust regression is necessary and models where it would merely produce the same results as OLS to emphasize their difference. As a general learning (mainly for us) was to always use (or at least check with) `lmrob()`, since the results are similar in the best case and more reliable in the worst case.
 
 ```{r lmrob-template}
 # For instance, the final Temperature model:
@@ -916,8 +917,6 @@ fm_temp_final <- lmrob(temperature ~ gcs_cat * iss_cat + gcs_cat:age_gen + age_g
                          unconsciousness, data = temp_nona, fast.s.large.n = Inf, setting = "KS2014")
 summary(fm_temp_final)
 ```
-
-*TODO: Include example coef change plot & summary output here (and maybe rest in appendix)*
 
 # Results: Key Findings and Clinical Implications
 
@@ -1007,9 +1006,6 @@ The overall explanatory power of the individual linear models is summarized by t
 
 
 As shown in Table 4, the adjusted R-squared values for the linear models vary across outcomes. While some outcomes, such as Hemoglobin, show a moderate proportion of explained variance (28.2%), others like Heart Rate and Lactate exhibit lower R2adj values (4.5% and 4.7%, respectively). It is important to contextualize these values within the realm of complex biological systems. Clinical outcomes are influenced by a multitude of factors, many of which are not captured in routinely collected administrative data. Therefore, even seemingly "lower" R2adj values can represent clinically meaningful associations, as the models successfully identify and quantify the impact of key predictors within the inherent variability of human physiology. These models provide valuable insights into the relationships between TBI and pathophysiology, despite not explaining all the variability in the outcomes. However, trying to predict physiological values based on the data used in this analysis will probably yield disappointing results, as can be seen in the plot below.
-
-*Include plot with fitted vs y to show that no predictive power*
-
 
 ```{r bad-predictivepower-plot}
 plot(fm_temp_final, which = 3)
@@ -1167,9 +1163,9 @@ This project, while providing valuable insights, is subject to several limitatio
 
 * **Informative missingness:** The issue of missing data is also highlighted. While vital signs are typically measured for almost all emergency room patients (suggesting missingness is likely noise), more specific laboratory tests like lactate and creatine kinase are only measured when clinically indicated. In these cases, missing data is less likely to be random noise and more likely to be "informative," meaning the absence of data itself carries information (as discussed above).
 
-* **Rare cases:**: While overall patterns emerged, the analysis allows only limited conclusions for cases of very severe TBI, as these were rare. In particular, there were only a few dozen cases with brain edema or brain compression, and the standard errors in the regression models for these categories were correspondingly large.
+* **Rare cases:** While overall patterns emerged, the analysis allows only limited conclusions for cases of very severe TBI, as these were rare. In particular, there were only a few dozen cases with brain edema or brain compression, and the standard errors in the regression models for these categories were correspondingly large.
 
-* **Interactions:**: Interpreting interaction terms can be challenging, especially when multiple interactions are included. Although it is possible to visualize the interaction effects by summarizing the average outcome variable values by interacted variable groups (e.g., visualize the average hemoglobin levels by combinations of GCS and ISS categories), these summaries would only correspond to marginal effects and may be difficult to interpret in the context of the full model.
+* **Interactions:** Interpreting interaction terms can be challenging, especially when multiple interactions are included. Although it is possible to visualize the interaction effects by summarizing the average outcome variable values by interacted variable groups (e.g., visualize the average hemoglobin levels by combinations of GCS and ISS categories), these summaries would only correspond to marginal effects and may be difficult to interpret in the context of the full model.
 
 
 # Conclusions and Forward-Looking Recommendations
@@ -1349,7 +1345,6 @@ Creatine Kinase:
 
 ## B. Additional Figures {-}
 
-*TODO: Paste in figures if we have some*
 The plot below illustrates how the robustness weights are pushed to zero for the robust temperature model:
 ```{r additional_figures1}
 df_temp_weights <- data.frame(
