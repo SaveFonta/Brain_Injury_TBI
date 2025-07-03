@@ -1125,18 +1125,6 @@ coefficient_plot(model = fm_temp_final, outcome_name = "Temperature",
 
 *TODO: Include Coef Plot & Describe what's happening*
 
-## Comparison of Classical vs. Robust Regression
-
-As mentioned above, a critical aspect of this analysis involved comparing the results obtained from classical Ordinary Least Squares (OLS) regression (`lm()`) with those from robust regression (`lmrob()`).
-
-*TODO: maybe include coef change plots for temp and ck where we used robreg? Maybe this subsection is not even necessary tho*
-
-As discussed above, for the majority of the outcomes, the coefficients remained stable across both classical OLS and robust regression. However, for CK and temperature, the analysis identified instances where large differences occurred between the OLS and robust regression coefficients (see plot). In such cases, robust regression provided more reliable and accurate estimates, as it effectively down-weighted the impact of influential observations.
-
-*TODO: Include outlier weight plots for ck and temperature*
-
-The outlier weight plots (as conceptually illustrated above) provide further transparency into the robust regression process, specifically how some observations in the remperature and CK models were weighted down. 
-
 ## General Patterns Across Outcomes
 
 Synthesizing the findings across all individual outcome models, several general patterns emerged:
