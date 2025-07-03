@@ -894,8 +894,6 @@ Each model was tailored based on preliminary findings from EDA and consideration
 
 An example of the general model structure, specifically for a classical linear model, is provided below. The full details and code for all other models are available in the Appendix.
 
-*TODO: Include an example here and put all models in the Appendix*
-
 ```{r lm-template}
 # This structure is representative of the models used for continuous outcomes.
 # For instance, the final Quick model:
@@ -1204,9 +1202,6 @@ Furthermore, integrating more detailed information on specific interventions wou
 # Appendix {-}
 
 ## A. Full Model Outputs {-}
-
-*TODO: Paste in the models, outputs, and maybe residual analysis
-
 
 ### Multivariate Model {-}
 ```{r glmm_output}
