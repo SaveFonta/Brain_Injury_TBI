@@ -4,33 +4,32 @@ title: 'Traumatic Brain Injury in Polytrauma: A Statistical Analysis of Pathophy
 author: "Saverio Fontana, Levy Jaeger, Valentin Johner"
 date: "`r Sys.Date()`"
 output:
-  html_document:
-    number_sections: true
-    toc: true
-    df_print: paged
-    code_folding: show     # Enable code folding
   pdf_document:
     toc: true
     number_sections: true
     fig_caption: true
     keep_tex: true
+  html_document:
+    number_sections: true
+    toc: true
+    df_print: paged
+    code_folding: show     # Enable code folding
 bibliography:
   report_references.bib
 csl:
   vancouver
-
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 library(MASS) # Used for boxcox, load before tidyverse
-library(car) # Used for boxcox
+library(car)
 library(tidyverse)
 library(ggplot2)
 library(glmmTMB) # For the initial GLMM approach (placeholder)
 library(robustbase) # For lmrob()
-library(data.table) # Used in data loading
-library(sfsmisc) # For p.res.2x, if you decide to include it
+library(data.table)
+library(sfsmisc)
 library(lemon) # For coord_capped_cart in coefficient plots
 library(tableone)
 library(knitr)
@@ -613,6 +612,7 @@ In this table, we summarize the occurrence of the different types of invasive ne
 
 ```{r table4}
 # Load dataset with interventions.
+setwd("..")
 load(paste0(clean_path, "interventions1_wide.RData"))
 intervention_names <- c("Korrektur Intrakranielles Monitoring",
                         "Korrektur Aneurysma/intrakranielle Gefässe",
