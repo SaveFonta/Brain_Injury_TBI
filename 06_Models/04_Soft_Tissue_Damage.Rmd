@@ -23,7 +23,8 @@ library(tidyverse)
 library(car)       # For diagnostic plots
 library(pROC)      # For ROC curves
 library(ordinal)
-
+library(robustbase)
+library(broom)
 
 knitr::opts_knit$set(root.dir = normalizePath(".."))
 ```
@@ -49,7 +50,7 @@ missing_summary[missing_summary > 0]  # Show only variables with NAs
 
 ```{r}
 # Data preparation
-poly <- poly %>%
+poly_ck <- poly %>%
   filter(ck <= 90000 | is.na(ck)) # Filter extreme CK values but keep NAs
 poly_ck <- poly %>% drop_na(ck)   
 
@@ -189,12 +190,15 @@ library(randomForest)
 rf <- randomForest(ck ~ gcs_cat + age_gen * iss_cat + severe_thoracic_injury + sex + 
                            bleeding + fracture + concussion + brain_edema + brain_compression +
                            unconsciousness, data = poly_ck, importance = TRUE)
-
-rf$importance
-
+print(rf)
 ```
 
 
+```{r}
+rf_ck_pred <- unname(predict(rf, poly_ck))
+R2_ck_rf <- 1 - (sum((poly_ck$ck - rf_ck_pred)^2) / sum((poly_ck$ck - mean(poly_ck$ck))^2))
+print(paste("Random Forest In-sample R^2 for ck:", round(R2_ck_rf, 3)))
+```
 
 
 

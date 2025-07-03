@@ -4,16 +4,16 @@ title: 'Traumatic Brain Injury in Polytrauma: A Statistical Analysis of Pathophy
 author: "Saverio Fontana, Levy Jaeger, Valentin Johner"
 date: "`r Sys.Date()`"
 output:
-  pdf_document:
-    toc: true
-    number_sections: true
-    fig_caption: true
-    keep_tex: true
   html_document:
     number_sections: true
     toc: true
     df_print: paged
     code_folding: show     # Enable code folding
+  pdf_document:
+    toc: true
+    number_sections: true
+    fig_caption: true
+    keep_tex: true
 bibliography:
   report_references.bib
 csl:
@@ -212,6 +212,7 @@ quick_nona <- poly %>% drop_na(quick)
 temp_nona <- poly %>% drop_na(temperature)
 lac_nona <- poly %>% drop_na(lactate)
 hgb_nona <- poly %>% drop_na(hemoglobin)
+ck_nona <- poly %>% drop_na(ck)
 ```
 
 We further note that using more complex, model-based imputation strategies such as multiple imputation by chained equations (MICE), which would predict missing outcome values using observed covariate values, may not be appropriate. These strategies are based on the assumption of missingness at random (MAR), which implies that the absence of measurements of the outcome variables is unrelated to the unmeasured values themselves when conditioned on observed covariates [@heymans_2022]. However, it is possible that unobserved confounders, particularly those related to the severity of the trauma presentation, influence both the observed covariates and missingness. This would invalidate the MAR assumption.
@@ -1000,6 +1001,7 @@ The overall explanatory power of the individual linear models is summarized by t
 | Lactate | 4.7% | 3.4% | 13.8% |
 | Quick | 10.3% | 10.3% | 16.5% |
 | Temperature | 8.4% | 10.6% | 22.8% |
+| Creatine kinase | 24.9% | 0.8% | 9.6% |
 *Table 4: R-squared values of linear models in comparison with random forests*
 
 
@@ -1123,7 +1125,30 @@ coefficient_plot(model = fm_temp_final, outcome_name = "Temperature",
 
 ## Impact on Soft Tissue Damage (Creatine Kinase - CK)
 
-*TODO: Include Coef Plot & Describe what's happening*
+For this model, we filter out extreme values (> 90000 U/L) and worked with the `r nrow(drop_na(poly, ck))` values after removing missingness A Box-Cox analysis indicated that the optimal transformation was close to a logarithmic transformation, which we adopted for interpretability. 
+
+The model revealed that as GCS severity increased (i.e., GCS score worsened), ck levels also increased. This suggests that more severe TBI is associated with greater muscle damage or systemic stress, reflected in elevated CK. Higher overall injury severity (ISS) was also strongly associated with increased ck levels. While age category showed a significant main effect—older patients tended to have lower ck levels—this effect was less consistent across contrasts.
+
+The model also identified several significant interaction terms between ISS and age, indicating that the relationship between injury severity and ck levels differs by age group. For instance, the increase in ck associated with higher ISS was more pronounced among certain age categories, suggesting age-related differences in physiological response to trauma.
+
+Regarding other factors, males had significantly higher ck levels than females. The presence of severe thoracic injury was associated with increased ck, while bleeding and fractures were linked to lower ck levels. Other brain injury variables—including concussion, brain edema, brain compression, and unconsciousness—did not show statistically significant main effects on ck in this model.
+
+```{r}
+ck_nona <- ck_nona %>%
+  filter(ck <= 90000 | is.na(ck)) 
+fm_ck_final <- lmrob(log(ck) ~ 
+                        gcs_cat + iss_cat* age_gen + severe_thoracic_injury + sex + 
+                        bleeding + fracture + concussion + brain_edema + brain_compression +
+                        unconsciousness,
+                      data = ck_nona,
+                      control = lmrob.control(
+                        max.it = 1000,
+                        fast.s.large.n = Inf  # Moved inside control
+                      ))
+
+coefficient_plot(model = fm_ck_final, outcome_name = "Creatine Kinase",
+                 x_breaks = seq(-.8, .8, by = .2))
+```
 
 ## General Patterns Across Outcomes
 
@@ -1322,7 +1347,20 @@ par(mfrow = c(1, 1))
 
 Creatine Kinase:
 ```{r ck_output}
-# 
+# Final model for Quick (log-transformed)
+# This model includes an interaction between age_gen and iss_cat,
+# which was found to be statistically significant after ANOVA comparison.
+# Robust regression (lmrob) was chosen for Temperature due to the presence of
+# influential outliers that significantly affected classical linear model (lm) results.
+
+# Summary of the final Quick model (for Appendix)
+summary(fm_ck_final)
+
+# Diagnostic plots for the final Quick model
+# These plots help assess model assumptions (linearity, normality of residuals, homoscedasticity).
+par(mfrow = c(2, 2))
+plot(fm_ck_final)
+par(mfrow = c(1, 1))
 ```
 
 
