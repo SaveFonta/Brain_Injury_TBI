@@ -35,7 +35,7 @@ library(tidyverse)
 library(sfsmisc)
 library(robustbase)
 
-# knitr::opts_knit$set(root.dir = normalizePath(".."))
+knitr::opts_knit$set(root.dir = normalizePath(".."))
 ```
 
 
@@ -107,7 +107,7 @@ We may also provide a more interpretable version by treating the individual cate
 
 ```{r multivar1}
 predictors <- c("gcs_cat", "bleeding", "fracture", "unconsciousness",
-                "brain_edema", "brain_compression", "concussion", "invasive")
+                "brain_edema", "brain_compression", "concussion")
 controls <- c("age_gen", "sex", "iss_cat", "severe_thoracic_injury")
 poly_long <- melt(poly, 
                   id.vars = c("research_case_id", predictors, controls),
@@ -126,7 +126,7 @@ poly_long[, severebrain := as.factor(as.integer(brain_edema == 1 |
 model1 <- glmmTMB(altered ~ pph * (gcs_cat + age_gen + 
                                      iss_cat + severe_thoracic_injury + sex + 
                                      bleeding + fracture + concussion + severebrain + 
-                                     unconsciousness + invasive) +
+                                     unconsciousness) +
                     (1 | research_case_id),
                   data = poly_long,
                   family = "binomial")
@@ -141,7 +141,7 @@ coef_multivar <- function(model) {
   # extract covariance matrix
   cov1 <- summary(model)$vcov$cond
   # extract indices belonging to hypotension
-  ind_hypotension <- which(1 == c(1, rep(0, 6), rep(1, 16)))
+  ind_hypotension <- which(1 == c(1, rep(0, 6), rep(1, 15)))
   hypotension <- matrix(0, nrow = 1, ncol = nrow(coef1))
   hypotensiondata <- data.frame(
     index = factor(ind_hypotension, levels = 1:nrow(coef1)))
@@ -180,7 +180,7 @@ plot_multivar <- function(model, alpha = .05,
                             variable = c("gcs_cat.L", "gcs_cat.Q", "gcs_cat.C", 
                                          "gcs_cat1.mild", "gcs_cat2.moderate", "gcs_cat3.severe",
                                          "concussion1", "bleeding1", "fracture1", "severebrain1",
-                                         "unconsciousness1", "invasive1",
+                                         "unconsciousness1", 
                                          "iss_cat.L", "iss_cat.Q", "iss_cat.C", 
                                          "iss_cat2.9-15", "iss_cat3.16-24", "iss_cat4.25+",
                                          "severe_thoracic_injury1",
@@ -191,7 +191,7 @@ plot_multivar <- function(model, alpha = .05,
                                               "GCS 13-15", "GCS 9-12", "GCS \u22648",
                                               "Concussion", "Intracranial bleeding",
                                               "Skull fracture", "Severe brain injury",
-                                              "Loss of consciousness", "Invasive procedure",
+                                              "Loss of consciousness",
                                               "ISS category, linear", "ISS category, quadratic", "ISS category, cubic",
                                               "ISS 9-15", "ISS 16-24", "ISS \u226525",
                                               "Severe thoracic injury",
@@ -248,7 +248,7 @@ poly_long_unordered[, `:=`(gcs_cat = factor(gcs_cat, ordered = FALSE),
 model2 <- glmmTMB(altered ~ pph * (gcs_cat + age_gen + 
                                      iss_cat + severe_thoracic_injury + sex + 
                                      bleeding + fracture + concussion + severebrain + 
-                                     unconsciousness + invasive) +
+                                     unconsciousness) +
                     (1 | research_case_id),
                   data = poly_long_unordered,
                   family = "binomial")
@@ -278,12 +278,12 @@ coef_compare <- rbind(
     by = "dim") |> 
   left_join(data.frame(
     variable = c("concussion1", "bleeding1", "fracture1", "severebrain1",
-                 "unconsciousness1", "invasive1",
+                 "unconsciousness1",
                  "severe_thoracic_injury1",
                  "sexm"),
     variable_nice = c("Concussion", "Intracranial bleeding",
                       "Skull fracture", "Severe brain injury",
-                      "Loss of consciousness", "Invasive procedure",
+                      "Loss of consciousness",
                       "Severe thoracic injury",
                       "Male sex")),
     by = "variable") |> 
@@ -359,7 +359,7 @@ plot_missing <- function(model, alpha = .05,
                            variable = c("gcs_cat.L", "gcs_cat.Q", "gcs_cat.C", 
                                         "gcs_cat1.mild", "gcs_cat2.moderate", "gcs_cat3.severe",
                                         "concussion1", "bleeding1", "fracture1", "severebrain1",
-                                        "unconsciousness1", "invasive1",
+                                        "unconsciousness1",
                                         "iss_cat.L", "iss_cat.Q", "iss_cat.C", 
                                         "iss_cat2.9-15", "iss_cat3.16-24", "iss_cat4.25+",
                                         "severe_thoracic_injury1",
@@ -370,7 +370,7 @@ plot_missing <- function(model, alpha = .05,
                                              "GCS 13-15", "GCS 9-12", "GCS \u22648",
                                              "Concussion", "Intracranial bleeding",
                                              "Skull fracture", "Severe brain injury",
-                                             "Loss of consciousness", "Invasive procedure",
+                                             "Loss of consciousness",
                                              "ISS category, linear", "ISS category, quadratic", "ISS category, cubic",
                                              "ISS 9-15", "ISS 16-24", "ISS \u226525",
                                              "Severe thoracic injury",

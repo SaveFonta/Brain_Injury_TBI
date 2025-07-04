@@ -1,0 +1,1376 @@
+---
+title: 'Traumatic Brain Injury in Polytrauma: A Statistical Analysis of Pathophysiological
+  Impact'
+author: "Saverio Fontana, Levy Jaeger, Valentin Johner"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    number_sections: true
+    toc: true
+    df_print: paged
+bibliography:
+  report_references.bib
+csl:
+  vancouver
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(MASS) # Used for boxcox, load before tidyverse
+library(car)
+library(tidyverse)
+library(ggplot2)
+library(glmmTMB) # For the initial GLMM approach (placeholder)
+library(robustbase) # For lmrob()
+library(data.table)
+library(sfsmisc)
+library(lemon) # For coord_capped_cart in coefficient plots
+library(tableone)
+library(knitr)
+library(kableExtra)
+library(eulerr)
+
+# Load any additional libraries needed
+```
+
+```{r load-data}
+# load datasets
+
+# Go one level up in the folder structure (otherwise in 07_Report)
+setwd("..")
+
+# Define path to cleaned data
+clean_path <- "02_data/02_clean_data/"
+
+# Load the pre-processed polytrauma population data
+# This data set already contains age_gen, gcs_cat, and iss_cat as ordered factors,
+# and specific brain injury indicators as factors.
+poly <- readRDS(paste0(clean_path, "population_poly.rds"))
+
+#load the full population data
+population <- readRDS(paste0(clean_path, "population.rds"))
+
+```
+
+# Summary
+
+This report presents a comprehensive statistical analysis conducted in collaboration with the Department of Traumatology at the University Hospital Zurich. The primary objective was to investigate the relationship between traumatic brain injury (TBI) and the broader pathophysiology observed in polytrauma patients, utilizing real-world hospital data.
+
+The analysis was based on a dataset of over 7,000 polytrauma patients, employing a multi-faceted modeling approach. An initial multivariate generalized linear mixed model provided a holistic view of TBI's systemic impact, while subsequent individual robust linear models offered detailed insights into specific physiological alterations. The use of robust regression methods was crucial in handling the inherent variability and outliers common in clinical data, ensuring the reliability of the findings.
+
+A central finding of this study is the consistent and strong association between the severity of TBI, particularly as quantified by the Glasgow Coma Scale (GCS) at admission, and more pronounced physiological alterations in trauma patients. This relationship was observed across several critical dimensions of polytrauma pathophysiology, including shock, coagulopathy, temperature regulation, and soft tissue damage. While the overall severity of TBI (GCS) showed a clear impact, the specific type of brain injury demonstrated a less consistent influence across these physiological systems.
+
+Based on these findings, this report provides actionable recommendations for clinical practice, emphasizing the continued importance of GCS assessment. It also offers strategic guidance for future data collection efforts and analytical methodologies to further refine understanding and improve patient outcomes in this complex patient population.
+
+# Introduction: Understanding Traumatic Brain Injury in Polytrauma
+
+Polytrauma, defined as the presence of injuries involving at least two different body regions, represents a significant clinical challenge. Such injuries often lead to profound systemic physiological alterations, collectively referred to as pathophysiology. These alterations can manifest across various critical domains, including impaired circulation (shock), compromised blood clotting (coagulopathy), temperature dysregulation (hypothermia), and extensive soft tissue damage [@pape_2022].
+
+Traumatic Brain Injury (TBI), an external injury to the brain, is a common and severe complication frequently observed in patients suffering from polytrauma [@capizzi_2020]. As a central regulatory organ, the brain can influence multiple physiological systems when injured. Consequently, TBI has the potential to significantly worsen the overall clinical picture and outcomes in polytrauma patients. However, the precise extent to which different aspects of polytrauma pathophysiology are influenced by TBI, both in terms of its severity and specific type, is not yet fully understood.
+
+This project was undertaken as part of the MSc Statistics in the course "Statistics Lab" at ETH Zürich, representing a collaboration with the Department of Traumatology at the University Hospital Zurich. The study utilized anonymized electronic medical records and administrative data collected routinely from trauma patients admitted to the hospital between 2012 and 2020. This real-world dataset offers a valuable opportunity to investigate the interplay between TBI and systemic physiological responses in a large, representative patient cohort.
+
+The core research question guiding this investigation was: *How does TBI affect the pathophysiology of polytrauma?* Addressing this question involved a rigorous statistical analysis designed to quantify the relationships between TBI characteristics and various physiological parameters, aiming to provide clinically relevant insights for patient management and future research.
+
+# Data Landscape: Characteristics and Preparation
+## Data Source
+
+This analysis is based on a dataset comprising **19,624 trauma cases** treated at the University Hospital Zurich from 2012 to 2020. These data points represent routinely recorded hospital admission information, encompassing both administrative details and critical clinical measurements. The dataset encompassed different tables that were linked through unique case identifiers, allowing for an assessment of different clinical characteristics. These tables included:
+
+* Demographic patient characteristics.
+* Indicators for the presence of different types of TBI.
+* Indicators for the presence of invasive neurosurgical procedures.
+* The different trauma diagnoses of the patients along with their severity, as defined by the Abbreviated Injury Scale (AIS), and the associated overall Injury Severity Score (ISS) [@lecky_2014].
+* Vital signs, of which we used heart rate, blood pressure, temperature, and Glasgow Coma Scale (GCS).
+* Laboratory test results, of which we used hemoglobin, lactate, Quick value, international normalized ratio (INR), and creatine kinase (CK).
+
+For our analysis, we employed the following operationalized definitions:
+
+* We defined **polytrauma** as the presence of injuries in at least two different body regions, as per the AIS classification. For this definition, we excluded injuries belonging to AIS region number 9 (Unspecified) and those with an AIS value of 0.
+* We defined **TBI** as the occurrence of at least one TBI-defining injury as specified in the provided dataset. These injuries included concussion, intracranial bleeding, skull fracture, brain edema, brain compression, and loss of consciousness. For the regression analyses, the subtypes of intracranial bleeding (epidural, subdural, subarachnoid, and diffuse) and of skull fracture (vault and base) were not considered separately to avoid over-fragmentation of the data.
+
+We conducted the analyses summarized in this report with the statistical software R 4.5.0 (R Foundation for Statistical Computing, Vienna, Austria) [@R_2025].
+
+During the initial data inspection and cleaning phase, several challenges were encountered, notably the presence of **duplicate measurements** for the same clinical variable for the same patient at the same time stamp. These duplicates were presumed to result from repeated measurements taken at the same time, possibly resulting from the correction of measurement errors (e.g., wrong notation of blood pressure readings). To ensure consistency and establish a clear baseline for analysis, the decision was made in consultation with the client to retain only the last value for each variable per patient and time stamp. 
+
+
+## Variables of Interest: Outcomes, Predictors, and Controls
+The analysis was systematically structured around four primary physiological domains, each representing a critical aspect of polytrauma pathophysiology. These domains guided the selection of specific outcome variables, key predictors related to TBI, and essential control variables.
+
+| Variable name | Category | Type | Transformation |
+| :------------ | :------- | :--- | :------------- |
+| Mean arterial pressure | Outcome | Continuous | `sqrt()` |
+| Heart rate | Outcome | Continuous | `log()` |
+| Lactate | Outcome | Continuous | `^(-1/3)` |
+| Hemoglobin | Outcome | Continuous | `^2` |
+| Quick value | Outcome | Continuous | `^2` |
+| Temperature | Outcome | Continuous | None |
+| CK | Outcome | Continuous | `log()` |
+| GCS | Predictor | Ordered factor | None |
+| Loss of consciousness | Predictor | Binary | None |
+| Concussion | Predictor | Binary | None |
+| Brain edema | Predictor | Binary | None |
+| Brain compression | Predictor | Binary | None |
+| Bleeding | Predictor | Binary | None |
+| Fracture | Predictor | Binary | None |
+| Age | Control | Ordered factor | None |
+| Sex | Control | Binary | None |
+| ISS | Control | Ordered factor | None |
+| AIS Thorax | Control | Ordered factor | None |
+*Table 1: Variable overview*
+
+**Outcome Variables:** These variables were selected to quantify the physiological state across the four dimensions of polytrauma pathophysiology: 
+
+* **Shock (Circulation):** Mean Arterial Pressure (MAP; continuous) in mmHg, Heart Rate (continuous) in beats per minute (bpm), Lactate (continuous) in mmol/L, and Hemoglobin (continuous) in g/L. The MAP was calculated from the diastolic blood pressure (DBP) and the systolic blood pressure (SBP) using the formula
+$$
+ \text{MAP} = \frac{2}{3} \text{DBP} + \frac{1}{3} \text{SBP}.
+$$
+
+* **Coagulopathy:** Quick value (continuous). Initially, INR was considered as a marker for coagulopathy. However, during exploratory data analysis (EDA), INR exhibited erratic distributions and remained unstable even after logarithmic transformation. The Quick value is approximately inversely proportional to INR (Quick value = 100 / INR). This approximate inverse relationship held in the dataset. The decision to proceed with the Quick value was driven by its better statistical behavior and greater clinical interpretability compared to a heavily transformed INR, ensuring more reliable and understandable results.
+
+* **Temperature regulation:** Temperature (continuous) in °C.
+
+* **Soft tissue damage:** CK (continuous) in U/L.
+
+**Key Predictors:** These variables are central to understanding the impact of TBI:
+
+* **Glasgow Coma Scale (GCS):** An ordered factor, GCS is used as a clinical indicator of consciousness level and, by extension, TBI severity. It categorizes TBI into "Unknonw", "Mild (13-15)", "Moderate (9-12)", and "Severe (3-8)".
+
+* **Indicators of TBI type:** A set of binary variables (loss of consciousness, concussion, brain edema, brain compression, bleeding, fracture) were included to capture specific anatomical or physiological aspects of TBI beyond overall severity.
+
+We note that the different types of invasive neurosurgical interventions were not considered as model covariates. While they may be used as a proxy for TBI severity (see the Table 4 section below), including them would most likely lead to collider bias [@holmberg_2022]: The decision towards invasive neurosurgical interventions may be driven by both the outcome variables and the other model covariates.
+
+
+**Control variables:** To account for other factors that could influence the outcomes, the following control variables were included:
+
+* **Age**: An ordered factor, included as a demographic control. For improved clinical interpretability, continuous age was categorized into three ordered groups: "<40 years", "40-69 years", and "70+ years". This categorization also helped in managing the truncation present in the original continuous age data, where all ages starting from 79 years were encoded as "79+".
+
+* **Sex** (binary) was included as a further standard demographic confounder.
+
+* **Injury Severity Score (ISS):** An ordered factor, ISS provides an overall measure of polytrauma severity, encompassing injuries across multiple body regions. Its inclusion helps differentiate the specific impact of TBI from the general severity of other injuries. It is categorized into four ordered groups: "Mild (1-8)", "Moderate (9-15)", "Severe (16-24)", and "Critical (25+)".
+
+* **Indicator of severe thoracic injury:** A binary indicator for the presence of severe thoracic injury, defined as an AIS value in the Thorax region of at least 2, was included due to the significant role severe thoracic injury, particularly lung injury, plays in the overall pathophysiology of polytrauma [@pape_2022].
+
+
+## Data Preprocessing and Handling Missingness
+
+A notable issue encountered in the data preparation step was the presence of missing values for certain variables. The process of handling these missing data points required careful consideration, particularly distinguishing between truly random missingness and "informative missingness".
+
+For vital signs such as Blood Pressure and Heart Rate, which are routinely measured for virtually every patient upon arrival at the emergency room, missing values were generally considered to be random noise. However, for more specific laboratory tests like lactate and CK, missing values were assumed "informatively missing". This means that these tests were assumed to be typically only performed when there was a specific clinical suspicion, such as signs of shock for lactate or muscle injury for CK. For instance, lactate levels were present in only 67.5% of all cases, indicating that a substantial portion of patients did not have this measurement recorded, likely because it was not clinically indicated at the time. The absence of such a measurement, therefore, carries information about the patient's condition or the clinical decision-making process.
+
+```{r missing}
+outcomes <- c("hr", "bp", "hemoglobin", "lactate", "inr", "quick", "ck", "temperature")
+tablemissing <- CreateTableOne(data = poly |> 
+                                 mutate_at(.vars = outcomes,
+                                           .funs = \(x) as.character(as.numeric(is.na(x)))),
+                               vars = outcomes) |> 
+  print(printToggle = FALSE, noSpaces = TRUE) |> 
+  data.frame() |>
+  rownames_to_column(var = "outcome") |>
+  mutate(outcome = case_when(
+    grepl("^n$", outcome) ~ "n",
+    grepl("hr", outcome) ~ "Heart rate, (%)",
+    grepl("bp", outcome) ~ "MAP, (%)",
+    grepl("hemoglobin", outcome) ~ "Hemoglobin, (%)",
+    grepl("lactate", outcome) ~ "Lactate, (%)",
+    grepl("inr", outcome) ~ "INR, (%)",
+    grepl("quick", outcome) ~ "Quick value, (%)",
+    grepl("ck", outcome) ~ "CK, (%)",
+    grepl("temperature", outcome) ~ "Temperature, (%)"))
+colnames(tablemissing) <- c("Outcome variable", "Missing (%)")
+tablemissing |> 
+  kable(format = "html", align = c("l", "r"), escape = FALSE) |>
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    font_size = 14,
+    position = "left"
+  ) |>
+  row_spec(0, bold = TRUE, color = "white", background = "#4F81BD") |>  # Header styling
+  column_spec(1, bold = TRUE, width = "3cm") |>  # First column (Characteristic)
+  column_spec(2:ncol(tablemissing), width = "2cm")  |>   # Other columns
+  scroll_box(width = "100%", fixed_thead = TRUE)
+```
+
+
+Despite the potential for informative missingness, the chosen strategy for the primary analysis was to *remove cases with any missing values* from the dataset for the outcome of interest (e.g., all cases with missing lactate measurements were removed when analyzing lactate as the outcome variable). Prior to this, imputation strategies using typical "normal" values (e.g., 37.0°C for temperature, INR 0.8-1.1, Quick = 100) were explored. The results of these checks indicated that the core findings and parameter estimates were robust and did not meaningfully change when such imputations were applied.
+
+```{r}
+# Remove cases with missing MAP (bp in the dataset) or heart rate (hr) as these
+# are expected to be consistently measured at admission.
+poly <- poly |> drop_na(bp, hr)
+```
+
+```{r na-treatment}
+# Remove cases with missing values in the other variables
+quick_nona <- poly |> drop_na(quick)
+temp_nona <- poly |> drop_na(temperature)
+lac_nona <- poly |> drop_na(lactate)
+hgb_nona <- poly |> drop_na(hemoglobin)
+ck_nona <- poly |> drop_na(ck)
+```
+
+We further note that using more complex, model-based imputation strategies such as multiple imputation by chained equations (MICE), which would predict missing outcome values using observed covariate values, may not be appropriate. These strategies are based on the assumption of missingness at random (MAR), which implies that the absence of measurements of the outcome variables is unrelated to the unmeasured values themselves when conditioned on observed covariates [@heymans_2022]. However, it is possible that unobserved confounders, particularly those related to the severity of the trauma presentation, influence both the observed covariates and missingness. This would invalidate the MAR assumption.
+
+
+**Transformations and Derived Variables:**
+Several outcome variables exhibited skewed distributions or non-linear relationships with predictors, necessitating specific transformations to meet the assumptions of linear models. These transformations were selected after inspection of distribution shapes and residual diagnostics from exploratory linear models. The application of Box-Cox transformations proved particularly useful for addressing skewed residual distributions.
+
+For example, here we report the exploration of INR vs. Quick value.
+```{r inr-quick-eda, fig.height=4, fig.width=8}
+# Initial exploration of INR distribution
+par(mfrow=c(1,2))
+hist(poly$inr, main = "Histogram of INR", xlab = "INR")
+hist(poly$quick, main = "Histogram of Quick value", xlab = "Quick value")
+par(mfrow=c(1,1))
+
+# Further exploration of transformations
+par(mfrow=c(1,2))
+boxplot(log(poly$inr), main = "log(INR) Distribution")
+boxplot(poly$quick^2, main = "Quick^2 Distribution")
+par(mfrow=c(1,1))
+```
+
+The specific transformations applied were:
+
+* **Lactate:** Inverse cube root (`Lactate^(-1/3)`).
+
+* **CK:** Log transformation (`log(Creatine Kinase)`).
+
+* **MAP:** Square root (`sqrt(Blood Pressure)`).
+
+* **Heart rate:** Log transformation (`log(Heart Rate)`).
+
+* **Hemoglobin:** Square transformation (`Hemoglobin^2`).
+
+* **Quick value:** Square transformation (`Quick^2`).
+
+
+## Study Population
+
+The dataset included a total of 19,624 cases, belonging to 15,815 patients (with 2,741 patients having two or more recorded cases). Of these cases, 7,347 had polytrauma, and 7,132 had a TBI according to the definitions provided above. The overlap between these two groups was substantial, with 5,159 cases experiencing both conditions, while 2,188 had polytrauma only, and 1,973 had TBI only. The following Venn diagram visually represents the overlap between polytrauma and TBI in this population. 
+
+
+```{r venn}
+venndata <- population[, .(Polytrauma = as.numeric(polytrauma) - 1,
+                           TBI = as.numeric(tbi) - 1,
+                           All = 1)]
+colnames(venndata) <- paste0(colnames(venndata), " (",
+                             colSums(venndata), ")")
+vennfit <- euler(venndata)
+plot(vennfit, quantities = TRUE, 
+     fills = c("darkgray", "steelblue", "white"),
+     labels = FALSE, legend = TRUE,
+     edges = list(col = "black", lwd = 2))
+```
+
+The 15,815 patients belonging to these cases had a median age of 54 years, with an interquartile range (IQR) spanning 36 to 73 years. A majority of the patients, 58.9%, were male. The overall mortality rate observed in this cohort was 4.3%, and the median hospital stay was 4 days (IQR: 2–10 days). More details on the patient characteristics can be found in the exploratory tables section below.
+
+
+# Exploratory Tables and Figures
+
+During the EDA phase, we created tables and graphics that summarize the characteristics of the polytrauma population and explore the relationships between the different TBI-related variables. The following sections present the EDA results, which are grouped under the headings "Table 1" through "Table 4", based on a sheet of recommended analyses provided by the client.
+
+## Table 1: Population Characteristics
+
+These Tables provide a general description of the various variables of interest in the overall population.
+
+### All Cases
+
+```{r}
+table1vars <- c("age", "sex", "polytrauma", "tbi", "Head", "Thorax",
+                "stay_days", "death",
+                "iss", "gcs_cat",
+                "invasive",
+                "bp", "hr", "hemoglobin", "lactate", "quick", "inr",
+                "temperature", "ck")
+table1vars_nice <- c("Age, years", "Sex", "Polytrauma", "TBI", "AIS Head", "AIS Thorax",
+                     "Length of hospital stay, days", "Death", "ISS", "GCS category",
+                     "Invasive neurosurgical procedure",
+                     "MAP, mmHg", "Heart rate, bpm", "Hemoglobin, g/L", "Lactate, mmol/L", "Quick value",
+                     "INR", "Temperature, °C", "CK, U/L")
+outcome_vars <- c("MAP, mmHg", "Heart rate, bpm", "Hemoglobin, g/L", "Lactate, mmol/L", "Quick value",
+                  "INR", "Temperature, °C", "CK, U/L")
+table1data <- population[, ..table1vars]
+table1data[, gcs_cat := case_when(
+  gcs_cat == "0.unknown" ~ "  Unknown",
+  gcs_cat == "1.mild" ~ "  Mild (13-15)",
+  gcs_cat == "2.moderate" ~ "  Moderate (9-12)",
+  gcs_cat == "3.severe" ~ "  Severe (3-8)") |> 
+    factor(levels = c("  Unknown", "  Mild (13-15)", "  Moderate (9-12)", "  Severe (3-8)"),
+           ordered = TRUE)]
+table1data[, Head := paste0("  ", as.character(Head)) |> 
+             factor(levels = paste0("  ", 0:6))]
+bincols <- c("tbi", "polytrauma", "death", "invasive")
+table1data[, (bincols) := lapply(.SD, \(x) {
+  ifelse(x == 1, "Yes", "No") |> 
+    factor(levels = c("No", "Yes"))}),
+           .SDcols = bincols]
+table1data[, sex := ifelse(sex == "m", "Male", "Female") |> 
+             factor(levels = c("Female", "Male"))]
+setnames(x = table1data, old = table1vars, new = table1vars_nice)
+table1 <- CreateTableOne(data = table1data,
+                         vars = table1vars_nice) |> 
+  print(nonnormal = c("Age, years", "Length of hospital stay, days", "ISS",
+                      outcome_vars),
+        printToggle = FALSE,
+        noSpaces = TRUE,
+        missing = TRUE) |> 
+  data.frame(check.names = FALSE) |> 
+  rownames_to_column(var = "Characteristic")
+colnames(table1)[3] <- "Missing (%)"
+
+# Print the table with improved styling
+table1 |>
+  kable(format = "html", align = c("l", rep("c", 2)), escape = FALSE) |>
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    font_size = 14,
+    position = "left"
+  ) |>
+  row_spec(0, bold = TRUE, color = "white", background = "#4F81BD") |>  # Header styling
+  column_spec(1, bold = TRUE, width = "3cm") |>  # First column (Characteristic)
+  column_spec(2:ncol(table1), width = "2cm") |>  # Other columns
+  scroll_box(width = "100%", fixed_thead = TRUE)  # Scrollable box
+```
+
+### Stratified by Presence of TBI
+
+Since the presence of TBI is the primary focus of this analysis, we created a stratified version to compare the characteristics of polytrauma patients with and without TBI.
+
+```{r table1_stratified}
+table1data[, `AIS Head` := population$Head]
+table1tbi <- CreateTableOne(data = table1data,
+                            strata = "TBI",
+                            vars = c(setdiff(table1vars_nice, "TBI"))) |> 
+  print(nonnormal = c("Age, years", "Length of hospital stay, days", "ISS",
+                      outcome_vars),
+        printToggle = FALSE,
+        noSpaces = TRUE, test = FALSE,
+        missing = TRUE)
+table1tbi_names <- rownames(table1tbi)
+table1tbi <- table1tbi |> 
+  data.frame(check.names = FALSE) |> 
+  mutate(Characteristic = table1tbi_names) |> 
+  select(Characteristic, No, Yes, Missing)
+colnames(table1tbi)[2:4] <- c("No TBI", "TBI", "Missing (%)")
+rownames(table1tbi) <- NULL
+
+# Print the table with improved styling
+table1tbi |>
+  kable(format = "html", align = c("l", rep("c", 3)), escape = FALSE) |>
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    font_size = 14,
+    position = "left"
+  ) |>
+  row_spec(0, bold = TRUE, color = "white", background = "#4F81BD") |>  # Header styling
+  column_spec(1, bold = TRUE, width = "3cm") |>  # First column (Characteristic)
+  column_spec(2:ncol(table1tbi), width = "2cm") |>  # Other columns
+  scroll_box(width = "100%", fixed_thead = TRUE)  # Scrollable box
+```
+
+### Polytrauma Cases Only, Overall
+
+Since this analysis focuses on patients with polytrauma, we created a table summarizing the characteristics of polytrauma cases only.
+
+```{r table1_polytrauma}
+table1_polytrauma <- CreateTableOne(data = table1data[population$polytrauma == "1"],
+                                    includeNA = TRUE,
+                                    vars = setdiff(table1vars_nice, "Polytrauma")) |> 
+  print(nonnormal = c("Age, years", "Length of hospital stay, days", "ISS",
+                      outcome_vars),
+        printToggle = FALSE,
+        noSpaces = TRUE,
+        missing = TRUE)
+table1poly_names <- rownames(table1_polytrauma)
+table1_polytrauma <- table1_polytrauma |> 
+  data.frame(check.names = FALSE) |> 
+  mutate(Characteristic = table1poly_names) |> 
+  select(Characteristic, Overall, Missing)
+rownames(table1_polytrauma) <- NULL
+colnames(table1_polytrauma)[3] <- "Missing (%)"
+
+# Print the table with improved styling
+table1_polytrauma |>
+  kable(format = "html", align = c("l", rep("c", 2)), escape = FALSE) |>
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    font_size = 14,
+    position = "left"
+  ) |>
+  row_spec(0, bold = TRUE, color = "white", background = "#4F81BD") |>  # Header styling
+  column_spec(1, bold = TRUE, width = "3cm") |>  # First column (Characteristic)
+  column_spec(2:ncol(table1_polytrauma), width = "2cm") |>  # Other columns
+  scroll_box(width = "100%", fixed_thead = TRUE)  # Scrollable box
+
+```
+
+
+### Polytrauma Cases Only, Stratified by Presence of TBI
+```{r table1_polytrauma_stratified}
+table1tbi_polytrauma <- CreateTableOne(data = table1data[population$polytrauma == "1"],
+                                       strata = "TBI",
+                                       vars = setdiff(table1vars_nice, c("TBI", "Polytrauma")),
+                                       includeNA = TRUE) |> 
+  print(nonnormal = c("Age, years", "Length of hospital stay, days", "ISS",
+                      outcome_vars),
+        printToggle = FALSE,
+        noSpaces = TRUE, 
+        test = FALSE,
+        missing = TRUE)
+table1tbipoly_names <- rownames(table1tbi_polytrauma)
+table1tbi_polytrauma <- table1tbi_polytrauma |> 
+  data.frame(check.names = FALSE) |> 
+  mutate(Characteristic = table1tbipoly_names) |> 
+  select(Characteristic, No, Yes, Missing)
+rownames(table1tbi_polytrauma) <- NULL
+colnames(table1tbi_polytrauma)[2:4] <- c("No TBI", "TBI", "Missing (%)")
+
+# Print the table with improved styling
+table1tbi_polytrauma |>
+  kable(format = "html", align = c("l", rep("c", 3)), escape = FALSE) |>
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    font_size = 14,
+    position = "left"
+  ) |>
+  row_spec(0, bold = TRUE, color = "white", background = "#4F81BD") |>  # Header styling
+  column_spec(1, bold = TRUE, width = "3cm") |>  # First column (Characteristic)
+  column_spec(2:ncol(table1tbi_polytrauma), width = "2cm") |>  # Other columns
+  scroll_box(width = "100%", fixed_thead = TRUE)  # Scrollable box
+
+```
+
+### Distribution of Injuries
+
+The following table summarizes the distribution of different types of TBI injuries among the TBI cases. Note that each case can belong to multiple injury types, as this represents the presence of different TBI injuries at admission. The majority of cases (3,451; 69.7%) had a concussion, followed by intracranial bleeding (1,450; 29.3%) and skull fractures (1063; 21.5%). Loss of consciousness was reported in 1,219 cases (24.6%). Of the 4,952 TBI cases, 3,042 (61.4%) had only one type of TBI, 1,564 (31.6%) had two different types, and the remaining 346 (7.0%) had three or more different types of TBI.
+
+```{r tbi_types}
+# Extract cases with TBI
+tbi_types <- c("concussion", "bleeding", "fracture", 
+               "unconsciousness", "brain_edema", "brain_compression")
+tbi_types_nice <- c("Concussion", "Intracranial bleeding", "Skull fracture",
+                    "Loss of consciousness", "Brain edema", "Brain compression")
+poly_tbi <- poly[tbi == "1", .SD, .SDcols = c("research_case_id", tbi_types)]
+poly_tbi[, (tbi_types) := lapply(.SD,
+                                 \(x) as.numeric(x) - 1),
+         .SDcols = tbi_types]
+# Visualize the frequency of each TBI type
+poly_tbi_stat <- melt(poly_tbi, id.vars = "research_case_id",
+                      measure.vars = tbi_types,
+                      variable.name = "TBI Type",
+                      value.name = "present") |> 
+  group_by(`TBI Type`) |> 
+  summarize(n_cases = sum(as.numeric(present)))
+ggplot(poly_tbi_stat, aes(y = fct_rev(`TBI Type`),
+                          x = n_cases)) +
+  geom_col(fill = "steelblue", width = .5) +
+  scale_y_discrete(breaks = tbi_types,
+                   labels = tbi_types_nice) +
+  labs(title = "Frequencies of TBI Types",
+       x = "Number of Cases", y = NULL) +
+  theme_minimal() +
+  theme(axis.text = element_text(color = "black"),
+        axis.title.x = element_text(margin = margin(10,0,0,0)),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank())
+
+# Calculate the number of different TBIs per case. 
+poly_tbi[, n_injuries := rowSums(.SD),
+         .SDcols = tbi_types]
+# Visualize the distribution
+ggplot(poly_tbi, aes(y = fct_rev(as.factor(n_injuries)))) +
+  geom_bar(fill = "steelblue", width = 0.5) +
+  theme_minimal() +
+  labs(title = "Distribution of TBI-Defining Injuries",
+       x = "Number of Cases", y = "Number of Different TBI-Defining Injuries") +
+  theme(panel.grid.x = element_blank(),
+        axis.text = element_text(color = "black"),
+        axis.title.y = element_text(margin = margin(0,10,0,0)),
+        axis.title.x = element_text(margin = margin(10,0,0,0)),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank())
+```
+
+
+## Table 2: Types of Injury versus GCS Category
+
+This table summarizes the distribution of the GCS categories among different types of TBI injuries. Note that each case only belongs to only one GCS category because this represents the measurement at admission. However, one individual case can be involved in different TBI types.
+
+```{r table2}
+# Calculate the distribution of GCS categories among TBI types
+table2_data <- poly[tbi == "1", .SD,
+               .SDcols = c(tbi_types, "gcs_cat")] |> 
+  melt(id.vars = "gcs_cat",
+       measure.vars = tbi_types,
+       variable.name = "tbi_type",
+       value.name = "present") |> 
+  filter(present == "1") |> 
+  group_by(tbi_type) |> 
+  mutate(n_tbi = n()) |> 
+  group_by(tbi_type, gcs_cat) |> 
+  mutate(n_cases = n(),
+         perc_cases = 100 * n_cases / n_tbi) |> 
+  select(tbi_type, gcs_cat, perc_cases) |> 
+  distinct() |> 
+  left_join(y = data.frame(
+    tbi_type = tbi_types,
+    tbi_type_nice = tbi_types_nice,
+    check.names = FALSE), 
+    by = "tbi_type") |> 
+  mutate(tbi_type_nice = factor(tbi_type_nice,
+                                levels = tbi_types_nice),
+         gcs_cat = case_when(
+           gcs_cat == "0.unknown" ~ "Unknown",
+           gcs_cat == "1.mild" ~ "Mild (13-15)",
+           gcs_cat == "2.moderate" ~ "Moderate (9-12)",
+           gcs_cat == "3.severe" ~ "Severe (3-8)") |> 
+           factor(levels = c("Unknown", "Mild (13-15)", 
+                             "Moderate (9-12)", "Severe (3-8)")))
+# Visualize
+table2_data |> 
+  ggplot(aes(y = fct_rev(gcs_cat), x = perc_cases)) +
+  geom_col(width = .5, fill = "steelblue") +
+  facet_rep_wrap(~ tbi_type_nice, ncol = 2) +
+  theme_minimal() +
+  labs(y = "GCS Category", x = "% of Cases") +
+  scale_x_continuous(breaks = seq(0, 100, by = 25),
+                     limits = c(0, 100)) +
+  coord_capped_cart(bottom = "both") +
+  theme(axis.text = element_text(color = "black"),
+        axis.title.y = element_text(margin = margin(0,10,0,0)),
+        axis.title.x = element_text(margin = margin(10,0,0,0)),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        axis.ticks.x = element_line(color = "black"),
+        axis.line.x = element_line(color = "black"))
+```
+
+Conversely, we may also summarize the distribution of TBI types among different GCS categories.
+
+```{r table2-2}
+table2 <- CreateTableOne(data = poly[tbi == "1", ],
+               vars = tbi_types,
+               strata = "gcs_cat") |> 
+  print(printToggle = FALSE, 
+        test = FALSE, noSpaces = TRUE) |> 
+  data.frame(check.names = FALSE)
+colnames(table2) <- c("Unknown", "Mild (13-15)", "Moderate (9-12)", "Severe (3-8)")
+table2 <- rownames_to_column(table2, var = "TBI Type")
+table2$`TBI Type` <- c("n", paste0(tbi_types_nice, " (%)"))
+
+table2 |> 
+  kable(format = "html", align = c("l", rep("c", 4)), escape = FALSE) |>
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    font_size = 14,
+    position = "left"
+  ) |>
+  row_spec(0, bold = TRUE, color = "white", background = "#4F81BD") |>  # Header styling
+  column_spec(1, bold = TRUE, width = "3cm") |>  # First column (Characteristic)
+  column_spec(2:ncol(table2), width = "2cm") |>  # Other columns
+  scroll_box(width = "100%", fixed_thead = TRUE)  # Scrollable box
+```
+
+This table shows: While the majority of cases with mild GCS impairment has a concussion, the distribution is shifted towards intracranial bleeding and fractures for moderate to severe GCS impairment. Note that a small proportion of cases with TBI had an unknown GCS category at admission (256; 5.2%).
+
+
+## Table 3: Types of Injury versus AIS Head Values
+
+In this table, we summarize the occurrence of different types of TBI by AIS values for the body region "Head". Note that the dataset does not contain any AIS values for the body region "Head" that are higher than 3.
+
+```{r table3}
+table3 <- CreateTableOne(data = poly[tbi == "1", ] |> 
+                           mutate(Head = as.character(Head)),
+               vars = tbi_types,
+               strata = "Head") |> 
+  print(printToggle = FALSE, 
+        test = FALSE, noSpaces = TRUE) |> 
+  data.frame(check.names = FALSE)
+colnames(table3) <- paste0("AIS Head: ", 0:3)
+table3 <- rownames_to_column(table3, var = "TBI Type")
+table3$`TBI Type` <- c("n", paste0(tbi_types_nice, " (%)"))
+
+table3|> 
+  kable(format = "html", align = c("l", rep("c", 4)), escape = FALSE) |>
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    font_size = 14,
+    position = "left"
+  ) |>
+  row_spec(0, bold = TRUE, color = "white", background = "#4F81BD") |>  # Header styling
+  column_spec(1, bold = TRUE, width = "3cm") |>  # First column (Characteristic)
+  column_spec(2:ncol(table2), width = "2cm") |>  # Other columns
+  scroll_box(width = "100%", fixed_thead = TRUE)  # Scrollable box
+```
+
+Note that a small number of cases was reported with an AIS value of zero (11; 0.2%) for the body region "Head". These cases may correspond to documentation errors.
+
+## Table 4: Types of Intervention Versus GCS Category and AIS Head Values
+
+In this table, we summarize the occurrence of the different types of invasive neurosurgical interventions by GCS category and head AIS values.
+
+```{r table4}
+# Load dataset with interventions.
+setwd("..")
+load(paste0(clean_path, "interventions1_wide.RData"))
+intervention_names <- c("Korrektur Intrakranielles Monitoring",
+                        "Korrektur Aneurysma/intrakranielle Gefässe",
+                        "Korrektur Knocheneingriffe Schädel",
+                        "Korrektur Kraniotomie/Kraniektomie",
+                        "Korrektur Bohrloch",
+                        "Korrektur Zugänge zur Schädelbasis/Schädelkalotte",
+                        "Korrektur Inzision an den Hirnhäuten",
+                        "Korrektur Punktion/Drainage/Inzision",
+                        "Korrektur Ventrikelsystem",
+                        "Korrektur Ekzision/Destruktion",
+                        "Korrektur Hirnhäute/intrakranielle Nerven")
+intervention_names_en <- c("Intracranial monitoring",
+                           "Aneurysm/inracranial vessels",
+                           "Cranial bone surgery",
+                           "Craniotomy/crainectomy",
+                           "Burr hole",
+                           "Access to skull base/skull vault",
+                           "Incision of meninges",
+                           "Puncture/drainage/incision",
+                           "Ventricular system",
+                           "Excision/destruction",
+                           "Meninges/intracranial nerves")
+
+# Make table for interventions and GCS categories
+table4data <- merge(poly[tbi == "1", .(research_case_id,
+                                       gcs_cat,
+                                       Head)], 
+                    interventions1_wide,
+                    by = "research_case_id",
+                    all.x = TRUE)
+table4gcs <- CreateTableOne(data = table4data,
+                            vars = intervention_names,
+                            strata = c("gcs_cat"),
+                            factorVars = intervention_names) |> 
+  print(printToggle = FALSE, 
+        test = FALSE, noSpaces = TRUE) |> 
+  data.frame(check.names = FALSE)
+colnames(table4gcs) <- c("Unknown", "Mild (13-15)", "Moderate (9-12)", "Severe (3-8)")
+table4gcs <- right_join(data.frame(Intervention = c("n", paste0(intervention_names_en, ", (%)")),
+                                   intervention_old = c("n", paste0(intervention_names, " = 1 (%)"))),
+                        y = table4gcs |> 
+                          rownames_to_column(var = "intervention_old"),
+                        by = "intervention_old") |> 
+  select(-intervention_old)
+table4gcs |> 
+  kable(format = "html", align = c("l", rep("c", 4)), escape = FALSE) |>
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    font_size = 14,
+    position = "left"
+  ) |>
+  row_spec(0, bold = TRUE, color = "white", background = "#4F81BD") |>  # Header styling
+  column_spec(1, bold = TRUE, width = "3cm") |>  # First column (Characteristic)
+  column_spec(2:ncol(table2), width = "2cm") |>  # Other columns
+  scroll_box(width = "100%", fixed_thead = TRUE)  # Scrollable box
+
+# Make table for interventions and head AIS values
+table4ais <- CreateTableOne(data = table4data |> 
+                              mutate(Head = as.character(Head)),
+                            vars = intervention_names,
+                            strata = c("Head"),
+                            factorVars = intervention_names) |> 
+  print(printToggle = FALSE, 
+        test = FALSE, noSpaces = TRUE) |> 
+  data.frame(check.names = FALSE)
+colnames(table4ais) <- paste0("AIS Head: ", 0:3)
+table4ais <- right_join(data.frame(Intervention = c("n", paste0(intervention_names_en, ", (%)")),
+                                   intervention_old = c("n", paste0(intervention_names, " = 1 (%)"))),
+                        y = table4ais |> 
+                          rownames_to_column(var = "intervention_old"),
+                        by = "intervention_old") |> 
+  select(-intervention_old)
+table4ais |> 
+  kable(format = "html", align = c("l", rep("c", 4)), escape = FALSE) |>
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = TRUE,
+    font_size = 14,
+    position = "left"
+  ) |>
+  row_spec(0, bold = TRUE, color = "white", background = "#4F81BD") |>  # Header styling
+  column_spec(1, bold = TRUE, width = "3cm") |>  # First column (Characteristic)
+  column_spec(2:ncol(table2), width = "2cm") |>  # Other columns
+  scroll_box(width = "100%", fixed_thead = TRUE)  # Scrollable box
+```
+
+These tables suggest that with more severe GCS category, the frequency of invasive neurosurgical interventions increases.
+
+
+# Analytical Approach
+
+The overarching goal of this analysis was to find out how traumatic brain injury influences the various dimensions of polytrauma pathophysiology. Given that the outcome variables span multiple physiological systems, the initial analytical strategy aimed for a holistic understanding of these interconnected effects.
+
+## Initial Multivariate Exploration: A Holistic View
+
+An initial idea was to model all outcomes simultaneously within a multivariate framework. This approach was intended to capture shared variance across different physiological parameters and explicitly account for correlations among outcomes observed within the same patient. For instance, a patient with severe TBI might simultaneously experience alterations in blood pressure, heart rate, and coagulation, and a multivariate model could inherently account for these within-patient dependencies.
+
+To achieve this holistic perspective, a multivariate Generalized Linear Mixed Model (GLMM) was fitted using the `glmmTMB` package in R [@mollie_2017]. The rationale behind this model was to treat each physiological measurement as a binary variable. This was achieved by dichotomizing the continuous outcomes based on clinically relevant cutoffs, thereby identifying whether a patient's value fell below or above a critical threshold indicative of severe alteration, derived from the relevant trauma literature [@pape_2022; @cecconi_2014; @kodadek_2022; @atls_2018; @pape_2014; @rossaint_2023]. Note that for creatine kinase, we used a cutoff of 950 U/L, corresponding to five times the upper reference limit of 190 U/L reported in the laboratory dataset.
+
+| Outcome variable | Clinical cutoff | Interpretation |
+| :--------------- | :-------------- | :------------- |
+| Hemoglobin | < 70 g/L | Anemia |
+| MAP | < 65 mmHg | Hypotension |
+| Heart rate | > 100 bpm | Tachycardia |
+| Lactate | > 2 mmol/L | Hyperlactatemia |
+| INR | > 1.2 | Coagulopathy |
+| Temperature | < 35 °C | Hypothermia |
+| CK | > 950 U/L | Elevated Creatine Kinase |
+*Table 2: Dichotomization thresholds for the multivariate model.*
+
+
+The inclusion of a random effect per patient allowed the model to account for the inherent correlation between different outcomes measured within the same individual, acknowledging that a patient's overall physiological state influences all their measurements. The output of this multivariate model provided odds ratios (ORs) for each predictor across all dichotomized outcomes.
+
+```{r multivariate,fig.width=10,fig.height=15}
+# define dichotomized outcome variables
+multivar_data <- copy(poly)
+multivar_data[, `:=`(hypotension = as.integer(bp < 65),
+                     tachycardia = as.integer(hr > 100),
+                     acidosis = as.integer(lactate > 2),
+                     anemia = as.integer(hemoglobin < 70),
+                     coagulopathy = as.integer(inr > 1.2),
+                     hypothermia = as.integer(temperature < 35),
+                     rhabdomyo = as.integer(ck > 950))]
+predictors <- c("gcs_cat", "bleeding", "fracture", "unconsciousness",
+                "brain_edema", "brain_compression", "concussion")
+controls <- c("age_gen", "sex", "iss_cat", "severe_thoracic_injury")
+multivar_long <- melt(multivar_data, 
+                      id.vars = c("research_case_id", predictors, controls),
+                      measure.vars = c("hypotension", "tachycardia", "acidosis",
+                                       "anemia", "coagulopathy", "hypothermia", "rhabdomyo"), 
+                      value.name = "altered",
+                      variable.name = "pph")[!is.na(altered)]
+# define a variable for the pathophysiology dimension
+multivar_long[, pph_dim := case_when(
+  pph %in% c("anemia", "hypotension", "tachycardia", "acidosis") ~ "shock",
+  pph == "hypothermia" ~ "hypothermia",
+  pph == "rhabdomyo" ~ "softtissue",
+  pph == "coagulopathy" ~ "coagulopathy")]
+# Merge the "Brain Edema" and "Brain Compression" variables into a single 
+# "Severe brain injury" variable to avoid these too thinly populated classes.
+multivar_long[, severebrain := as.factor(as.integer(brain_edema == 1 | 
+                                                      brain_compression == 1))]
+# Fit the multivariate model
+model_multivar <- glmmTMB(altered ~ pph * (gcs_cat + age_gen + 
+                                             iss_cat + severe_thoracic_injury + sex + 
+                                             bleeding + fracture + concussion + severebrain + 
+                                             unconsciousness) +
+                            (1 | research_case_id),
+                          data = multivar_long,
+                          family = "binomial")
+
+# Function for calculation of coefficients by outcome
+coef_multivar <- function(model) {
+  coef1 <- summary(model)$coefficients$cond
+  colnames(coef1) <- c("est", "se", "z", "p")
+  coef1 <- as.data.frame(coef1) |> 
+    rownames_to_column(var = "variable")
+  # extract covariance matrix
+  cov1 <- summary(model)$vcov$cond
+  # extract indices belonging to hypotension
+  ind_hypotension <- which(1 == c(1, rep(0, 6), rep(1, 15)))
+  hypotension <- matrix(0, nrow = 1, ncol = nrow(coef1))
+  hypotensiondata <- data.frame(
+    index = factor(ind_hypotension, levels = 1:nrow(coef1)))
+  hypotensionmatrix <- model.matrix(~ -1 + index, data = hypotensiondata)
+  # extract all other dimensions
+  pph_dims <- setdiff(levels(multivar_long$pph), "hypotension")
+  pph_coefs <- lapply(pph_dims, function(dim) {
+    # dim <- "tachycardia"
+    ind <- which(grepl(dim, coef1$variable))
+    dimdata <- data.frame(index = factor(ind, levels = 1:nrow(coef1)))
+    dimmatrix <- model.matrix(~ -1 + index, data = dimdata) +
+      hypotensionmatrix
+    data.frame(variable = coef1$variable[ind_hypotension],
+               est = dimmatrix %*% coef1$est,
+               se = sqrt(diag(dimmatrix %*% cov1 %*% t(dimmatrix))),
+               dim = dim)
+  })
+  names(pph_coefs) <- pph_dims
+  pph_coefs$hypotension <- data.frame(variable = coef1$variable[ind_hypotension],
+                                      est = coef1$est[ind_hypotension],
+                                      se = coef1$se[ind_hypotension],
+                                      dim = "hypotension")
+  pph_coefs
+}
+# Function for plotting
+plot_multivar <- function(model, alpha = .05,
+                          orbreaks = c(.1, .5, 1, 2, 10, 20, 50),
+                          dimension_names = data.frame(
+                            dim = c("hypotension", "tachycardia", "anemia", "acidosis",
+                                    "coagulopathy", "hypothermia", "rhabdomyo"),
+                            dim_nice = c("Hypotension", "Tachycardia", "Anemia", "Hyperlactatemia",
+                                         "Coagulopathy", "Hypothermia", "Elevated Creatine Kinase")),
+                          ncol = 2,
+                          coef_names = data.frame(
+                            variable = c("gcs_cat.L", "gcs_cat.Q", "gcs_cat.C", 
+                                         "gcs_cat1.mild", "gcs_cat2.moderate", "gcs_cat3.severe",
+                                         "concussion1", "bleeding1", "fracture1", "severebrain1",
+                                         "unconsciousness1",
+                                         "iss_cat.L", "iss_cat.Q", "iss_cat.C", 
+                                         "iss_cat2.9-15", "iss_cat3.16-24", "iss_cat4.25+",
+                                         "severe_thoracic_injury1",
+                                         "age_gen.L", "age_gen.Q",
+                                         "age_gen2.40-69", "age_gen3.70<",
+                                         "sexm"),
+                            variable_nice = c("GCS category, linear", "GCS category, quadratic", "GCS category, cubic", 
+                                              "GCS 13-15", "GCS 9-12", "GCS \u22648",
+                                              "Concussion", "Intracranial bleeding",
+                                              "Skull fracture", "Severe brain injury",
+                                              "Loss of consciousness",
+                                              "ISS category, linear", "ISS category, quadratic", "ISS category, cubic",
+                                              "ISS 9-15", "ISS 16-24", "ISS \u226525",
+                                              "Severe thoracic injury",
+                                              "Age category, linear", "Age category, quadratic",
+                                              "Age 40-69 years", "Age >\u200970 years",
+                                              "Male sex"))) {
+  coef_table <- coef_multivar(model)
+  coef_table_long <- rbindlist(coef_table) |> 
+    left_join(dimension_names, by = "dim") |>
+    left_join(coef_names, by = "variable") |>
+    mutate(dim_nice = factor(dim_nice, levels = dimension_names$dim_nice),
+           variable_nice = factor(variable_nice, levels = coef_names$variable_nice),
+           or = exp(est),
+           logor_l = (est - qnorm(1 - alpha / 2) * se),
+           logor_u = (est + qnorm(1 - alpha / 2) * se),
+           or_l = exp(logor_l),
+           or_u = exp(logor_u))
+  coef_table_long |> 
+    filter(variable != "(Intercept)") |> 
+    ggplot(aes(x = est, y = fct_rev(variable_nice))) +
+    geom_vline(xintercept = 0, linewidth = .5) +
+    geom_point(color = "darkblue", shape = "diamond") +
+    geom_errorbarh(aes(xmin = logor_l, xmax = logor_u), 
+                   height = 0, color = "darkblue") +
+    facet_rep_wrap(~ dim_nice, ncol = ncol,
+                          repeat.tick.labels = TRUE) +
+    scale_x_continuous(breaks = log(orbreaks), labels = orbreaks,
+                       limits = log(range(orbreaks))) +
+    labs(y = NULL, x = "Odds ratio (95% confidence interval)") +
+    coord_capped_cart(bottom = "both") +
+    theme_classic() +
+    theme(axis.line.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.text = element_text(color = "black"),
+          panel.grid.major.x = element_line(color = "darkgrey"),
+          axis.title.x = element_text(margin = margin(10,0,0,0)))
+}
+plot_multivar(model_multivar)
+```
+
+
+However, this initial multivariate approach also presents certain limitations. Dichotomizing continuous outcomes, while simplifying interpretation, inherently discards a significant amount of information contained within the continuous (or ordered) scale. Furthermore, the choice of arbitrary or context-sensitive thresholds for dichotomization could potentially bias estimates or reduce the statistical power of the analysis. These limitations highlighted the need for a more granular examination of the continuous physiological parameters. This motivated the second step of the analysis: modeling each outcome as a continuous variable using individual linear regression models.
+
+## In-Depth Analysis: Individual Outcome Models
+
+The transition to individual linear regression models for each outcome variable allowed for a more detailed and nuanced analysis, fully leveraging the continuous nature of the physiological measurements. This approach further enabled the tailoring of each model to the specific characteristics of its respective physiological dimension.
+
+The general structure of these individual regression models typically included:
+
+* **Predictors of interest:** The GCS as a measure of TBI severity, alongside binary indicators for specific brain injury types (i.e., concussion, bleeding, fracture, loss of consciousness, brain edema, brain compression). 
+
+* **Control variables:** Age, sex, the ISS to account for overall polytrauma severity, and AIS Thorax to control for the impact of severe thoracic injuries.
+
+* **Interactions**: For these models, we explored the inclusion of interaction terms, where we restricted our considerations to interactions between age and ISS, between age and GCS category, and between ISS and GCS category.
+
+Each model was tailored based on preliminary findings from EDA and considerations of clinical plausibility.
+
+| Outcome variable | Applied transformation | Robust regression used |
+| :--------------- | :--------------------- | :--------------------- |
+| MAP | `sqrt()` | No |
+| Heart rate | `log()` | No |
+| Lactate | `^(-1/3)` | No |
+| Hemoglobin | `^2` | No |
+| Quick value | `^2` | No |
+| Temperature | None | Yes |
+| CK | `log()` | Yes |
+*Table 3: Overview over outcome variables, transformations, and applied model*
+
+An example of the general model structure, specifically for a classical linear model, is provided below. The full details and code for all other models are available in the Appendix.
+
+```{r lm-template, echo=TRUE}
+# This structure is representative of the models used for continuous outcomes.
+# For instance, the final Quick model:
+fm_quick_final <- lm(quick^2 ~ gcs_cat + age_gen * iss_cat + severe_thoracic_injury + sex +
+                       bleeding + fracture + concussion + brain_edema + brain_compression +
+                       unconsciousness, 
+                     data = quick_nona)
+```
+
+## Ensuring Robustness: The Role of Robust Regression
+
+Many variables frequently exhibit extreme values or potential outliers. Classical OLS regression models are highly sensitive to such extreme values; even a few outliers can potentially lead to distorted or misleading conclusions.
+
+To counter this susceptibility and ensure the reliability of the model estimates, **robust regression** methods were used. Specifically, the `lmrob()` function from the `robustbase` package in R was utilized [@maechler_2024]. The effectiveness of robust regression was systematically assessed for each linear model. This involved a direct comparison of the coefficients obtained from `lm()` (classical OLS from the `base` package) with those from `lmrob()` (robust regression). The analysis specifically checked whether the estimated coefficients changed meaningfully between the two methods. Furthermore, `lmrob()` provides insights into its internal workings by assigning weights to each observation in the model summary; observations identified as influential outliers are assigned lower weights, effectively reducing their impact on the parameter estimates. If the robust regression analysis revealed substantial changes in coefficient estimates or clearly identified influential outliers (classified as outliers in the summary output, see below) that altered the interpretation of the relationships, the output from `lmrob()` was retained and reported as the primary result. Conversely, if the coefficients remained stable and no data points were classified as outliers, the `lm()` estimates were reported for simplicity and ease of interpretation. Note that we could have used the outputs from `lmrob()` for all models, since the interpretation essentially remains the same. However, we decided to differentiate between models where robust regression is necessary and models where it would merely produce the same results as OLS to emphasize their difference. As a general learning (mainly for us) was to always use (or at least check with) `lmrob()`, since the results are similar in the best case and more reliable in the worst case.
+
+```{r lmrob-template, echo=TRUE}
+# For instance, the final temperature model:
+fm_temp_final <- lmrob(temperature ~ gcs_cat * iss_cat + gcs_cat:age_gen + age_gen + 
+                         severe_thoracic_injury + sex + bleeding + fracture + 
+                         concussion + brain_edema + brain_compression + unconsciousness, 
+                       data = temp_nona, 
+                       fast.s.large.n = Inf, 
+                       setting = "KS2014")
+summary(fm_temp_final)
+```
+
+# Results: Key Findings
+
+This section presents the key findings from the individual models, detailing the relationships between TBI characteristics and various physiological outcomes. The discussion focuses on the impact of GCS, specific injuries, and control variables, alongside the implications of data transformations and the utility of robust regression.
+
+```{r coef-plot-fun}
+# Define a helper function for plotting coefficients with nice names
+# This function is used to generate the coefficient plots included in the report.
+coefficient_plot <- function(model, outcome_name, plot_color = "darkblue", alpha =.05, x_breaks,
+                             backtrans = identity,
+                             coef_names = data.frame(
+                               variable = c("gcs_cat.L", "gcs_cat.Q", "gcs_cat.C", "concussion1",
+                                            "bleeding1", "fracture1", "brain_edema1",
+                                            "brain_compression1", "unconsciousness1",
+                                            "iss_cat.L", "iss_cat.Q", "iss_cat.C",
+                                            "severe_thoracic_injury1",
+                                            "age_gen.L", "age_gen.Q",
+                                            "sexm"),
+                               variable_nice = c("GCS category, linear", "GCS category, quadratic",
+                                                 "GCS category, cubic", "Concussion", "Intracranial bleeding",
+                                                 "Skull fracture", "Brain Edema", "Brain Compression",
+                                                 "Loss of consciousness",
+                                                 "ISS category, linear", "ISS category, quadratic",
+                                                 "ISS category, cubic",
+                                                 "Severe thoracic injury",
+                                                 "Age category, linear", "Age category, quadratic",
+                                                 "Male sex"))) {
+  # make nice names for interaction terms
+  interaction_names <- names(model$coefficients)
+  interaction_names <- interaction_names[grepl(pattern = ":", x = interaction_names)]
+  coef_names <- rbind(coef_names,
+                      data.frame(variable = interaction_names,
+                                 variable_nice = interaction_names |>
+                                   str_replace_all(c(gcs_cat = "GCS category",
+                                                     iss_cat = "ISS category",
+                                                     age_gen = "Age category",
+                                                     `\\.L` = ", linear",
+                                                     `\\.Q` = ", quadratic",
+                                                     `\\.C` = ", cubic",
+                                                     `:` = " x "))))
+  
+  model_coefs <- summary(model)$coefficients |>
+    data.frame(check.names = FALSE) |>
+    rownames_to_column(var = "variable") |>
+    filter(variable!= "(Intercept)") |>
+    left_join(coef_names, by = "variable") |>
+    mutate(cil = Estimate - qt(p = alpha / 2, df = model$df.residual) * `Std. Error`,
+           ciu = Estimate + qt(p = alpha / 2, df = model$df.residual) * `Std. Error`,
+           variable_nice = factor(variable_nice, levels = coef_names$variable_nice))
+  
+  # apply backtransformation
+  model_coefs <- model_coefs |> 
+    mutate_at(.vars = c("Estimate", "cil", "ciu"),
+              .fun = backtrans)
+  
+  model_coefs |>
+    ggplot(aes(x = Estimate, y = fct_rev(variable_nice))) +
+    geom_vline(xintercept = 0, color = "black") +
+    geom_point(color = plot_color) +
+    geom_errorbarh(aes(xmin = cil, xmax = ciu), height = 0,
+                   color = plot_color) +
+    theme_classic() +
+    scale_x_continuous(breaks = x_breaks, limits = range(x_breaks)) +
+    labs(x = "Coefficient Estimate (95% Confidence Interval)",
+         y = NULL, title = paste0("Model Coefficients: ", outcome_name)) +
+    coord_capped_cart(bottom = "both") +
+    theme(axis.line.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.text = element_text(color = "black"),
+          axis.title.x = element_text(margin = margin(10,0,0,0)),
+          panel.grid.major.x = element_line(color = "gray"))
+}
+```
+
+## Overview of Model Performance
+
+The overall explanatory power of the individual linear models is summarized by their adjusted R-squared (R2adj) values. These values indicate the proportion of variance in each outcome variable that is explained by the predictors included in the model.
+
+| Outcome | Linear model (R2adj) | Random forest, out-of-bag | Random forest, in-sample |
+| :-------------- | :------------------- | :------------------------ | :----------------------- |
+| Heart Rate | 4.5% | 3.5% | 11.5% |
+| Blood Pressure | 9.5% | 10.0% | 17.2% |
+| Hemoglobin | 28.2% | 29.4% | 35.1% |
+| Lactate | 4.7% | 3.4% | 13.8% |
+| Quick | 10.3% | 10.3% | 16.5% |
+| Temperature | 8.4% | 10.6% | 22.8% |
+| Creatine kinase | 24.9% | 0.8% | 9.6% |
+*Table 4: R-squared values of linear models in comparison with random forests*
+
+
+As shown in Table 4, the adjusted R-squared values for the linear models vary across outcomes. While some outcomes, such as Hemoglobin, show a moderate proportion of explained variance (28.2%), others like Heart Rate and Lactate exhibit lower R2adj values (4.5% and 4.7%, respectively). It is important to contextualize these values within the realm of complex biological systems. Clinical outcomes are influenced by a multitude of factors, many of which are not captured in routinely collected administrative data. Therefore, even seemingly "lower" R2adj values can represent clinically meaningful associations, as the models successfully identify and quantify the impact of key predictors within the inherent variability of human physiology. These models provide valuable insights into the relationships between TBI and pathophysiology, despite not explaining all the variability in the outcomes. However, trying to predict physiological values based on the data used in this analysis will probably yield disappointing results, as can be seen in the plot below.
+
+```{r bad-predictivepower-plot}
+plot(fm_temp_final, which = 3, sub.caption = "Fitted Values\n ")
+```
+
+## Impact on Shock
+
+The analysis of shock-related parameters consistently revealed significant associations with TBI severity. In summary, we observed that more severe TBI in terms of lower GCS scores were significantly associated with more pathological outcome values, i.e., lower MAP, higher heart rate, higher lactate, and lower hemoglobin levels. 
+
+
+### Mean Arterial Pressure
+
+For this model, we used a square root transformation and removed `r nrow(poly[bp == 0])` observations with (non-physiological) MAP equal to zero. The model for MAP (transformed using a square root) indicated that as GCS severity increased (i.e., GCS score category progressed from "mild" to "moderate" and "severe"), the square root of MAP generally decreased. This means more severe TBI is associated with lower MAP. Higher ISS and severe thoracic injury were also associated with lower MAP. Higher MAP values were also significantly associated with male sex and with higher age, possibly reflecting physiological differences unrelated to trauma. This model also included three significant interactions: Between ISS and GCS category, between GCS category and age, and between ISS and age. In particular, these interactions suggest that the relationship between GCS severity and MAP varies depending on the patient's ISS and age group.
+
+```{r coef-plot-map}
+map_nona <- poly |>
+  filter(!is.na(bp) &
+           bp != 0)
+fm_map_final <- lm(sqrt(bp) ~ gcs_cat + iss_cat + 
+                     gcs_cat:iss_cat + gcs_cat:age_gen + iss_cat:age_gen +
+                     age_gen + severe_thoracic_injury + sex +
+                     bleeding + fracture + concussion + brain_edema +
+                     brain_compression + unconsciousness,
+                   data = map_nona)
+coefficient_plot(model = fm_map_final, 
+                 outcome_name = "sqrt(MAP)",
+                 x_breaks = (-3:3)/5)
+```
+
+
+
+### Heart Rate
+
+For this model, we used a log transformation. In order to enable this transformation, we removed `r nrow(poly[hr == 0])` observations with (non-physiological) heart rate values of 0 bpm and `r nrow(poly[hr > 300])` observations with (non-physiological) heart rates above 300 bpm. Note that in this coefficient plot, the estimated model coefficients can be interpreted in a multiplicative manner (similar to the interpretation of rate ratios in count regression models), with estimate larger than 1 indicating an increase in heart rate and estimates smaller than 1 indicating a decrease in heart rate. Higher heart rates showed significant associations with increasing GCS severity and with the presence of brain edema. Interestingly, the association between heart rate and loss of consciousness was negative. In addition, there was a significant association of higher heart rate with ISS and with younger age. This model contained two significant interactions: Between GCS and age and between ISS and age. In particular, this suggests that the relationship between GCS severity and heart rate varies depending on the patient's age group.
+
+```{r coef-plot-hr}
+hr_nona <- poly |>
+  filter(hr != 0 & hr <= 300)
+fm_hr_final <- lm(log(hr) ~ gcs_cat + iss_cat +
+                    age_gen:iss_cat + gcs_cat:age_gen +
+                    age_gen + severe_thoracic_injury + sex +
+                    bleeding + fracture + concussion + brain_edema +
+                    brain_compression + unconsciousness,
+                  data = hr_nona)
+coefficient_plot(fm_hr_final, x_breaks = seq(.8, 1.2, by = .1),
+                 backtrans = exp,
+                 outcome_name = "Heart Rate (Multiplicative)")
+```
+
+
+
+### Lactate
+
+The model for lactate used an inverse cube root transformation. In order to enable this transformation, we removed `r nrow(poly[lactate == 0])` observations with (non-physiological) lactate values of zero. In the coefficient plot, estimates to the left side of the vertical zero axis suggest a positive association between the respective covariate and lactate levels (due to the minus sign in the power transformation). The results indicate that as GCS severity increased, the lactate levels increased, suggesting that more severe TBI is associated with higher lactate levels. We also observed significant associations with concussion, loss of consciousness, severe thoracic injury, and male sex. 
+
+```{r coef-plot-lac}
+lac_nona <- lac_nona |>
+  filter(lactate != 0)
+fm_lac_final <- lm(lactate^(-1/3) ~ gcs_cat + iss_cat +
+                     age_gen + severe_thoracic_injury + sex +
+                     bleeding + fracture + concussion + brain_edema +
+                     brain_compression + unconsciousness,
+                   data = lac_nona)
+coefficient_plot(model = fm_lac_final, 
+                 outcome_name = "Lactate^(-1/3)",
+                 x_breaks = seq(-.1, .1, by = .02))
+```
+
+
+
+### Hemoglobin
+
+In the model for hemoglobin levels, higher GCS severity was associated with lower hemoglobin levels, indicating that more severe TBI is associated with more severe anemia. The model also revealed significantly higher hemoglobin levels with younger age and male sex, most likely reflecting physiological sex- and age-related differences not related to trauma. In addition, we observed significantly lower hemoglobin levels with increasing ISS and with presence of severe thoracic injury. This model also included a significant interaction term between ISS and age, suggesting that the association of ISS with hemoglobin levels varies by age group.
+
+```{r coef-plot-hb}
+fm_hgb_final <- lm(hemoglobin^2 ~ gcs_cat + iss_cat * age_gen + 
+                     severe_thoracic_injury + sex +
+                     bleeding + fracture + concussion + brain_edema +
+                     brain_compression + unconsciousness,
+                   data = hgb_nona)
+coefficient_plot(fm_hgb_final, 
+                 x_breaks = seq(-5000, 5000, by = 1000),
+                 outcome_name = "Hemoglobin^2")
+```
+
+
+
+
+## Impact on Coagulopathy (Quick Value)
+
+The model for Quick value (transformed using a square transformation) demonstrated that as GCS severity increased, the squared Quick value decreased. This indicates that more severe TBI is associated with lower Quick values. As age increased, Quick value generally decreased, and this decrease accelerated in older age groups (presumably partly due to more prevalent intake of vitamin K antagonists). Similarly, higher ISS was associated with lower Quick values. A significant interaction between age and ISS was observed, meaning the effect of age on coagulation depends on the patient's overall injury severity, and vice-versa. Other factors also played a role: males, patients with severe thoracic injury, brain edema, or brain compression (although very large standard errors in the latter two) showed significantly lower Quick values. Conversely, the presence of fracture, concussion, or loss of consciousness (as a binary indicator) was associated with significantly (although in some cases barely) higher Quick values.
+
+```{r coef-plot-quick}
+coefficient_plot(model = fm_quick_final, outcome_name = "Quick^2", x_breaks = seq(-4000, 4000, by = 1000))
+```
+
+## Impact on Temperature
+
+The robust regression model for temperature (no transformation) revealed that as GCS severity increased, temperature decreased. This indicates that more severe TBI is associated with higher propensity for hypothermia. Higher ISS was also associated with lower temperatures. The model identified multiple significant interaction terms involving GCS with ISS, and GCS with age. This means the effect of GCS severity on temperature is not constant but varies depending on the patient's ISS and their age group. For example, the tendency for lower temperatures in more severe TBI might be different for older patients compared to younger ones, or for patients with different levels of overall injury. Regarding other factors, males tended to have slightly lower temperatures. The presence of intracranial bleeding was associated with significantly higher temperatures.
+
+
+```{r coef-plot-temperature}
+coefficient_plot(model = fm_temp_final, outcome_name = "Temperature",
+                 x_breaks = seq(-.8, .8, by = .2))
+```
+
+## Impact on Creatine Kinase
+
+Note that in this coefficient plot, the estimated model coefficients can be interpreted in a multiplicative manner (similar to the interpretation of rate ratios in count regression models), with estimate larger than 1 indicating an increase in CK levels and estimates smaller than 1 indicating a decrease in CK levels. The model revealed that as GCS severity increased, CK levels also increased. This suggests that more severe TBI is associated with elevated CK. Higher ISS was also strongly associated with increased CK levels. While age category showed a significant main effect: Older patients tended to have lower CK levels. The model also identified a significant interaction between ISS and age, indicating that the relationship between injury severity and CK levels differs by age group. Regarding other factors, males had significantly higher CK levels than females. The presence of severe thoracic injury was associated with increased CK, while intracranial bleeding and skull fractures were linked to lower CK levels.
+
+```{r coef-plot-ck}
+ck_nona <- ck_nona |>
+  filter(ck <= 90000 | is.na(ck)) 
+fm_ck_final <- lmrob(log(ck) ~ 
+                       gcs_cat + iss_cat* age_gen + severe_thoracic_injury + sex + 
+                       bleeding + fracture + concussion + brain_edema + brain_compression +
+                       unconsciousness,
+                     data = ck_nona,
+                     control = lmrob.control(
+                       max.it = 1000,
+                       fast.s.large.n = Inf  # Moved inside control
+                     ))
+coefficient_plot(model = fm_ck_final, outcome_name = "Creatine Kinase (Multiplicative)",
+                 backtrans = exp,
+                 x_breaks = seq(.4, 1.6, by = .2))
+```
+
+## General Patterns Across Outcomes
+
+Synthesizing the findings across all individual outcome models, several general patterns emerged:
+
+* **Strong association with GCS:** There were consistently strong associations between the outcome variables and the GCS level. This indicates that with a higher degree of impaired consciousness (i.e., lower GCS scores), the physiological outcomes tended to be more pathological across the various dimensions of shock, coagulopathy, temperature regulation, and soft tissue damage. This finding underscores the GCS as a critical indicator of systemic physiological disruption in TBI patients.
+
+* **Weaker role of injury ype:** In contrast to the strong GCS effect, the role of the specific type of brain injury (i.e., loss of consciousness, concussion, brain edema, brain compression, bleeding, fracture) was found to be weaker. This may suggest that the overall severity of neurological impairment, as captured by GCS, may be a more dominant factor in systemic physiological responses than the precise anatomical nature of the brain injury at admission.
+
+* **Importance of overall injury severity:** The ISS consistently emerged as an important predictor across most outcome variables. This highlights that the total burden of injury significantly contributes to the observed physiological alterations, independent of TBI.
+
+* **Impact of thoracic injury:** Severe thoracic injury also showed important associations with the outcome variables. This aligns with clinical understanding, as lung injury plays a significant role in the pathophysiology of polytrauma.
+
+In summary, the analysis provides robust evidence for a clear relationship between the degree of TBI, as expressed by the GCS at admission, and the pathophysiology of polytrauma. While the overall severity of TBI is a strong indicator, the specific types of brain injury appear to have a less consistent influence on systemic physiological alterations.
+
+# Limitations
+
+This analysis, while providing valuable insights, is subject to several limitations:
+
+* **Unmeasured confounding/mediation:** The analysis did not account for certain factors that could influence the observed relationships, such as administered therapy (especially for heart rate and blood pressure) and other clinical factors like medication and pre-existing diseases. These unmeasured variables could confound the results, making it difficult to isolate the true effect of TBI on pathophysiology.
+
+* **Reverse causation**: For some of the observed associations, the dataset does not provide enough information to determine the causal direction. For instance, lower hemoglobin levels are associated with lower GCS scores. However, this does not imply that the TBI would cause these lower hemoglobin levels. Rather, this finding can be interpreted as severe blood loss, as indicated by low hemoglobin levels, which leads to impaired consciousness, as indicated by a higher GCS severity.
+
+* **Misclassification bias:** There is a potential for misclassification bias, particularly concerning patients with low GCS scores who might be in a medically induced coma. This would affect the accuracy of TBI severity assessment. Additionally, the measurements were taken at hospital admission, meaning events prior to admission (e.g., pre-hospital treatment) were not captured, which could influence the baseline physiological state.
+
+* **Informative missingness:** The issue of missing data is also highlighted. While vital signs are typically measured for almost all emergency room patients (suggesting missingness is likely noise), more specific laboratory tests like lactate and creatine kinase are only measured when clinically indicated. In these cases, missing data is less likely to be random noise and more likely to be "informative," meaning the absence of data itself carries information (as discussed above).
+
+* **Rare cases:** While overall patterns emerged, the analysis allows only limited conclusions for cases of very severe TBI, as these were rare. In particular, there were only a few dozen cases with brain edema or brain compression, and the standard errors in the regression models for these categories were correspondingly large, and the confidence intervals correspondingly wide. In addition, we note that we employed a broad definition of 'polytrauma' as the presence of injuries in at least two AIS body regions, irrespective of their severity. Had we only considered cases involving severe injuries, the dataset would have shrunk to a few hundred cases, thus reducing the sample size substantially.
+
+* **Interactions:** Interpreting interaction terms can be challenging, especially when multiple interactions are included. Although it is possible to visualize the interaction effects by summarizing the average outcome variable values by interacted variable groups (e.g., visualize the average hemoglobin levels by combinations of GCS and ISS categories), these summaries would only correspond to marginal effects and may be difficult to interpret in the context of the full model.
+
+
+# Conclusions and Forward-Looking Recommendations
+
+## Key Conclusions
+
+In summary, we found evidence regarding the impact of TBI on the pathophysiology of polytrauma patients. A primary conclusion is the robust relationship between the degree of TBI, as quantified by the GCS at admission, and the extent of physiological alterations observed across multiple dimensions of polytrauma pathophysiology. Specifically, a higher degree of impaired consciousness (lower GCS scores) was consistently associated with more pathological outcomes in terms of shock, coagulopathy, temperature regulation, and soft tissue damage.
+
+While the overall severity of TBI, reflected by GCS, demonstrated a strong and consistent influence, the specific type of brain injury exhibited a less pronounced and less consistent relationship with systemic physiological changes across different outcomes. This suggests that the global neurological impact captured by GCS may be a more critical determinant of early systemic responses than the precise anatomical nature of the brain injury. Furthermore, the overall ISS and the severity of thoracic injuries were confirmed as significant contributors to polytrauma pathophysiology.
+
+Methodologically, this project underscored the challenges of analyzing real-world clinical data, particularly the presence of outliers, missing values, and skewed distributions. The application of robust regression methods and appropriate data transformations (e.g., Box-Cox transformations) proved very helpful in overcoming these challenges. This approach demonstrates that while "simple" OLS models can often be used even for complex problems, slight adjustments, extensions, and checks might be necessary to derive trustworthy conclusions.
+
+## Recommendations for Future Research
+
+Based on the findings and the analytical experience gained, we can provide the following recommendations for our client:
+
+1. **Enhance Data Collection for Confounders:** To further refine the understanding of TBI's impact and mitigate the influence of unmeasured confounding, future data collection efforts should be expanded to include more detailed information on critical factors not fully captured in the current dataset.
+
+  + Administered therapy: Detailed records of medications administered, especially those influencing physiological parameters, are vital for disentangling treatment effects from injury-induced changes. 
+
+  + Clinical factors: Comprehensive patient histories, including pre-existing medical conditions,   would provide a more complete picture of patient vulnerability and resilience. 
+
+  + Previous treatment and induced coma: Crucially, information on whether a patient was in a medically induced coma at the time of GCS assessment is necessary to avoid misclassification bias and accurately interpret GCS scores in the context of TBI severity.
+  
+2. **Documentation protocols for informative missingness:** Implementing clearer protocols for documenting the reasons for missing data in electronic medical records (e.g., "not indicated," "not performed," "unavailable") would provide valuable context for future analyses.
+
+3. **Quick value instead of INR**: Given the skewed distribution of the INR variable in the data, it is better to use Quick value as an indicator for coagulopathy in modeling (as explained before).
+
+
+## Outlook
+
+This project provides additional understanding of the relationship between TBI and polytrauma pathophysiology based on admission data. The data revealed no major surprises, and we were able to reproduce known patterns of associations. Future research could build upon these findings by generating new hypotheses and more refined research questions.
+
+Furthermore, integrating more detailed information on specific interventions would allow for a more nuanced analysis of how medical management interacts with TBI and other injuries to influence physiological outcomes. It will be important for future research to focus on improving data quality, completeness, and the systematic capture of clinically relevant confounders.
+
+# Appendix {-}
+
+## A. Full Model Outputs {-}
+
+This section summarises the outputs of the final regression models as generated by the respective `summary()` methods for `glmmTMB()`, `lm()`, or `lmrob()` fitting objects. The following variable names are used:
+
+* `gcs_cat`: GCS category (ordered factor with four levels)
+* `concussion`: presence of concussion
+* `bleeding`: presence of intracranial bleeding
+* `fracture`: presence of skull fracture
+* `brain_edema`: presence of brain edema
+* `brain_compression`: presence of brain compression
+* `unconsciousness`: presence of loss of consciousness
+* `iss_cat`: ISS category (ordered factor with four levels)
+* `severe_thoracic_injury`: presence of severe thoracic injury (AIS Thorax of at least 2)
+* `age_gen`: age category (ordered factor with three levels)
+* `sex`: sex (`m` for male versus female)
+
+Additionally, the suffixes `L`, `Q`, and `C` indicate coefficients for the linear, quadratic, and cubic terms of the respective ordered factor variable, respectively. For example, `gcs_cat.L` refers to the linear term of GCS category. Interaction terms are indicated by a colon (`:`) between variable names.
+
+
+### Multivariate Model {-}
+
+Final multivariate logistic regression model for pathophysiology alterations. This model includes an interaction between the kind of pathophysiology outcome and all other model covariates, so that it becomes equivalent to fitting one separate logistic regression model for each outcome. The kind of pathophysiology outcome is encoded in the variable `pph` with the levels `hypotension` (for hypotension; reference level) `acidosis` (for hyperlactatemia), `anemia` (for anemia), `coagulopathy` (for coagulopathy), `hypothermia` (for hypothermia), and `rhabdomyo` (for elevated CK).
+
+```{r glmm_output}
+summary(model_multivar)
+```
+
+### Individual Models: Shock {-}
+
+For each individual model, we show a summary including the regression coefficient estimates, the corresponding standard errors, and *p*-values. In addition, we show the following diagnostic plots:
+
+* Tukey-Anscombe plot (Residuals vs. fitted values)
+* Q-Q plot of residuals
+* Scale-Location plot (residuals vs. standardized fitted values)
+* Leverage plot (residuals vs. leverage)
+
+
+#### Mean Arterial Pressure {-}
+
+
+Final model for MAP (square-root-transformed). This model includes an interaction between age and ISS and between GCS and ISS, which were found to be statistically significant after ANOVA comparison. Classical linear model was chosen over robust regression as coefficient estimates were stable, indicating outliers did not disproportionately influence the results for MAP.
+
+```{r bp_output}
+summary(fm_map_final)
+par(mfrow = c(2, 2))
+plot(fm_map_final)
+par(mfrow = c(1, 1))
+```
+
+#### Heart Rate {-}
+
+Final model for heart rate (log-transformed). This model includes an interaction between age and ISS and between GCS and ISS, which were found to be statistically significant after ANOVA comparison. Classical linear model was chosen over robust regression as coefficient estimates were stable, indicating outliers did not disproportionately influence the results for heart rate.
+
+```{r hr_output}
+summary(fm_hr_final)
+par(mfrow = c(2, 2))
+plot(fm_hr_final)
+par(mfrow = c(1, 1))
+```
+
+#### Hemoglobin {-}
+
+Final model for hemoglobin (square-transformed). This model includes an interaction between age_gen and iss_cat, which was found to be statistically significant after ANOVA comparison. Classical linear model was chosen over robust regression as coefficient estimates were stable, indicating outliers did not disproportionately influence the results for hemoglobin.
+
+```{r hemoglobin_output}
+summary(fm_hgb_final)
+par(mfrow = c(2, 2))
+plot(fm_hgb_final)
+par(mfrow = c(1, 1))
+```
+
+
+#### Lactate {-}
+
+Final model for lactate (inverse-cube-root-transformed). This model includes no interaction terms. Classical linear model was chosen over robust regression as coefficient estimates were stable, indicating outliers did not disproportionately influence the results for lactate.
+
+```{r lactate_output}
+summary(fm_lac_final)
+par(mfrow = c(2, 2))
+plot(fm_lac_final)
+par(mfrow = c(1, 1))
+```
+
+
+### Individual Models: Coagulopathy {-}
+
+Final model for Quick value (squared-transformed). This model includes an interaction between age and ISS, which was found to be statistically significant after ANOVA comparison. Classical linear model was chosen over robust regression as coefficient estimates were stable, indicating outliers did not disproportionately influence the results for Quick value.
+
+```{r quick_output}
+summary(fm_quick_final)
+par(mfrow = c(2, 2))
+plot(fm_quick_final)
+par(mfrow = c(1, 1))
+```
+
+### Individual Models: Temperature {-}
+
+Final model for Temperature (no transformation). This model includes interactions between GCS and ISS, and GCS and age, which were found to be statistically significant after ANOVA comparison. Robust regression was chosen for Temperature due to the presence of influential outliers that significantly affected classical linear model results.
+
+```{r temperature_output, fig.height=8}
+summary(fm_temp_final)
+par(mfrow = c(3, 2))
+plot(fm_temp_final)
+par(mfrow = c(1, 1))
+```
+
+### Individual Models: Creatine Kinase {-}
+
+Final model for CK (log-transformed). This model includes an interaction between age and ISS, which was found to be statistically significant after ANOVA comparison. Robust regression was chosen for CK due to the presence of influential outliers that significantly affected classical linear model results.
+
+```{r ck_output, fig.height=8}
+summary(fm_ck_final)
+par(mfrow = c(3, 2))
+plot(fm_ck_final)
+par(mfrow = c(1, 1))
+```
+
+
+## B. Additional Figures {-}
+
+The plot below illustrates how the robustness weights are pushed to zero for observations with residuals of large magnitude in the robust temperature model:
+
+```{r additional_figures1}
+df_temp_weights <- data.frame(
+  Residuals = residuals(fm_temp_final),
+  Weights = weights(fm_temp_final, type = "robustness")
+)
+ggplot(df_temp_weights, aes(x = Weights, y = Residuals)) +
+  geom_point(aes(color = Weights), size = 2, alpha = 0.7, show.legend = FALSE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  scale_color_viridis_c(option = "plasma", end = 0.85) +
+  labs(
+    title = "Temperature: Residuals vs Robustness Weights",
+    x = "Robustness Weights",
+    y = "Residuals"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold")
+  )
+```
+
+## C. Project Experience Report {-}
+
+We found the modeling phase productive and well-coordinated. However, during data cleaning and early EDA, documentation was limited. We recommend keeping a live log of all models tested, transformations applied, and final dataset versions used. This would help avoid confusion and repetition in future teams.
+
+**Positive aspects:**
+
+* Team spirit
+
+* Effective communication within the team and with the supervisor
+
+* Clear division of tasks and responsibilities during the modeling phase
+
+**Areas for potential improvement:**
+
+* Implementing a more structured approach during the EDA phase
+
+* Enhancing documentation of all steps taken, including those that did not yield successful results
+
+* Improving the division of tasks during the data cleaning stage to address similar issues more efficiently
+
+# References {-}
