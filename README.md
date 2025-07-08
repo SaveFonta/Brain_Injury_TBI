@@ -60,3 +60,90 @@ The results provide **clinical insights and actionable recommendations** for tra
 │   └── vancouver.csl
 ├── .gitignore
 ├── Brain_Injury.Rproj       # RStudio project file
+
+
+
+---
+## 📥 How to Add Your Data
+
+The required patient-level dataset is **not included** in this repository due to privacy and confidentiality restrictions. The user must **manually insert** the data into the `01_raw_data/` directory.
+
+### 🖼️ Data File Structure
+
+To visualize the expected structure and file names, refer to the following image:
+
+![Data File Structure](docs/data_files_structure.png)
+
+
+
+
+## 📊 About `03_spreadsheets/`
+
+The folder `03_spreadsheets/` is used within the cleaning scripts `01_clean_diagnosen+mapping.Rmd` and `01_clean_vital+lab+patients.Rmd` as a **temporary inspection path**. You **do not** need to manually add or modify anything inside this folder.
+
+---
+
+## 🧹 Data Cleaning Workflow
+
+All raw data must undergo preprocessing before modeling. The cleaning process is documented in a series of RMarkdown notebooks located in the `04_cleaning_notebooks/` folder. These scripts handle tasks such as:
+
+- Diagnoses processing (`Diagnosen.xlsx`)
+- Intervention and ISS data cleaning
+- Patient vitals, lab values, and demographic info
+
+You can run individual scripts as needed (e.g., `01_clean_diagnosen+mapping.Rmd` for diagnoses), which will clean and save specific datasets. However, since the cleaning process is **not the main focus** of this project, we provide a **master script** that runs the entire cleaning pipeline:
+
+```r
+source("04_cleaning_notebooks/master_data_prep.R")
+
+
+
+---
+## 🧹 Data Cleaning Workflow (continued)
+
+✅ After running the script, check that the cleaned files are correctly stored in:
+
+
+
+
+---
+
+## 🔍 05_Exploration/
+
+The `05_Exploration/` folder contains various exploratory scripts we used to inspect and better understand the raw data. These analyses were helpful for identifying data inconsistencies, variable behavior, and modeling challenges.
+
+> ℹ️ This section is **less critical** for drawing final conclusions. It was primarily used for internal data comprehension.  
+A more focused and concise overview of key findings will be provided later in this README.
+
+---
+
+## 🧠 06_Models/
+
+The `06_Models/` folder contains scripts and notebooks used to implement and test various statistical models, including:
+
+- Generalized Linear Mixed Models (GLMMs)
+- Robust regression models
+- Correlation analyses related to pathophysiological outcomes
+
+Users are welcome to explore these scripts for detailed implementation.  
+However, **the final versions of the models and their results are fully documented in the report** provided in the next section.
+
+> 📌 A structured overview of the modeling approach will also be summarized further down in this README.
+
+---
+
+## 📄 07_Report/ — Final Results
+
+The most important deliverable of this project is the **final report**, which consolidates all key results, methodology, and interpretation.
+
+The report is provided in the following formats:
+
+- 📄 **PDF**: `07_Report/Report_final_pdf.Rmd`
+- 🌐 **HTML**: `07_Report/Report_final_html.Rmd`
+
+> ✅ These files represent the complete, finalized analysis and can be used independently to understand the study’s outcomes and implications.
+
+---
+
+
+
