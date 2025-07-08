@@ -1,5 +1,15 @@
 # 🧠 Traumatic Brain Injury in Polytrauma Patients: Statistical Analysis
 
+## 📚 Table of Contents
+- [📌 Summary](#-summary)
+- [📂 Repository Structure](#-repository-structure)
+- [📥 How to Add Your Data](#-how-to-add-your-data)
+- [🧹 Data Cleaning Workflow](#-data-cleaning-workflow)
+- [🔍 Exploratory Analysis](#-05_exploration)
+- [🧠 Modeling](#-06_models)
+- [📄 Final Report](#-07_report--final-results)
+
+  
 ## 📌 Summary
 
 This repository presents the results of a collaborative analysis between the **ETH Zürich MSc Statistics program** and the **Department of Traumatology at the University Hospital Zurich**. The goal is to understand how **Traumatic Brain Injury (TBI)** influences the broader **pathophysiology in polytrauma patients**, using real-world hospital data.
@@ -21,15 +31,15 @@ The results provide **clinical insights and actionable recommendations** for tra
 ---
 
 ## 📂 Repository Structure
-
+/01_raw_data
 ```text
 .
-├── 01_raw_data/              # Raw input data (user must provide manually)
-│   └── .gitkeep
-├── 02_clean_data/           # Cleaned datasets (produced by preprocessing scripts)
-│   └── .gitkeep
-├── 03_spreadsheets/         # Temporary spreadsheet path (used by 01_clean_diagnosen+mapping.Rmd)
-│   └── .gitkeep
+├── 02_data/   # Data to use
+│   ├── 01_raw_data
+│   └── 02_clean_data                    
+│  
+├── 03_spreadsheets         # Temporary spreadsheet path (used by 01_clean_diagnosen+mapping.Rmd)
+│ 
 ├── 04_cleaning_notebooks/   # Data cleaning RMarkdown notebooks
 │   ├── 01_clean_diagnosen+mapping.Rmd
 │   ├── 01_clean_iss+interventions.Rmd
@@ -61,18 +71,20 @@ The results provide **clinical insights and actionable recommendations** for tra
 ├── .gitignore
 ├── Brain_Injury.Rproj       # RStudio project file
 
+```
 
 
----
 ## 📥 How to Add Your Data
 
-The required patient-level dataset is **not included** in this repository due to privacy and confidentiality restrictions. The user must **manually insert** the data into the `01_raw_data/` directory.
+The required patient-level dataset is **not included** in this repository due to privacy and confidentiality restrictions. The user must **manually insert** the data into the `02_data/01_raw_data` directory.
 
-### 🖼️ Data File Structure
+### 🖼️ Expected Data Structure
 
-To visualize the expected structure and file names, refer to the following image:
+The following diagram illustrates the expected naming and format of input data files:
 
 ![Structure](https://github.com/SaveFonta/Brain_Injury_TBI/blob/main/Images/structure.png?raw=true)
+
+> ℹ️ You must match these filenames and structures for the cleaning scripts to run correctly.
 
 
 
@@ -92,9 +104,7 @@ All raw data must undergo preprocessing before modeling. The cleaning process is
 - Patient vitals, lab values, and demographic info
 
 You can run individual scripts as needed (e.g., `01_clean_diagnosen+mapping.Rmd` for diagnoses), which will clean and save specific datasets. However, since the cleaning process is **not the main focus** of this project, we provide a **master script** that runs the entire cleaning pipeline:
-
-```r
-source("04_cleaning_notebooks/master_data_prep.R")
+`04_cleaning_notebooks/master_data_prep.R`
 
 
 
@@ -102,8 +112,7 @@ source("04_cleaning_notebooks/master_data_prep.R")
 ## 🧹 Data Cleaning Workflow (continued)
 
 ✅ After running the script, check that the cleaned files are correctly stored in:
-
-
+`02_data/02_clean_data`
 
 
 ---
@@ -113,13 +122,24 @@ source("04_cleaning_notebooks/master_data_prep.R")
 The `05_Exploration/` folder contains various exploratory scripts we used to inspect and better understand the raw data. These analyses were helpful for identifying data inconsistencies, variable behavior, and modeling challenges.
 
 > ℹ️ This section is **less critical** for drawing final conclusions. It was primarily used for internal data comprehension.  
-A more focused and concise overview of key findings will be provided later in this README.
 
 ---
 
 ## 🧠 06_Models/
 
-The `06_Models/` folder contains scripts and notebooks used to implement and test various statistical models, including:
+> 📌 **Important:**  
+Before running any model scripts, make sure to execute `06_Models/data_prep.R`.  
+This script creates the **final cleaned patient subpopulations** used in the final report and saved in `02_data/02_clean_data`:
+
+```r
+population.rds"
+population_poly.rds"
+population_tbi.rds"
+population_poly_tbi.rds"
+```
+
+
+The `06_Models/` folder also contains scripts and notebooks used to implement and test various statistical models, including:
 
 - Generalized Linear Mixed Models (GLMMs)
 - Robust regression models
@@ -127,8 +147,6 @@ The `06_Models/` folder contains scripts and notebooks used to implement and tes
 
 Users are welcome to explore these scripts for detailed implementation.  
 However, **the final versions of the models and their results are fully documented in the report** provided in the next section.
-
-> 📌 A structured overview of the modeling approach will also be summarized further down in this README.
 
 ---
 
@@ -141,9 +159,50 @@ The report is provided in the following formats:
 - 📄 **PDF**: `07_Report/Report_final_pdf.Rmd`
 - 🌐 **HTML**: `07_Report/Report_final_html.Rmd`
 
-> ✅ These files represent the complete, finalized analysis and can be used independently to understand the study’s outcomes and implications.
 
----
+
+## 🛠️ Requirements
+
+To run the analysis, ensure you have the following:
+
+- R (≥ 4.0)
+- RStudio
+- Required R packages (see individual `.Rmd` files for `library()` calls)
+
+## Package Installation
+
+Run this command to install all required packages:
+
+```r
+install.packages(c(
+  # Data Manipulation
+  "data.table", "dplyr", "tidyr", "tidyverse", "rio", "stringi",
+  
+  # Statistical Modeling
+  "MASS", "car", "robustbase", "lme4", "lmerTest", "glmmTMB", 
+  "ordinal", "poLCA", "logistf", "sfsmisc",
+  
+  # Visualization
+  "ggplot2", "vcd", "eulerr", "lemon",
+  
+  # Reporting & Tables
+  "tableone", "knitr", "kableExtra",
+  
+  # Model Evaluation
+  "pROC", "broom"
+))
+```
+
+## Important Notes
+
+### Load Order Matters  
+**Always load `MASS` before `tidyverse`** to prevent function masking (especially `select()`).
+
+```r
+library(MASS)     # Load first
+library(tidyverse) # Load after to ensure select() isn't masked
+```
+
 
 
 
