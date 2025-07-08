@@ -4,4 +4,14 @@
 .Rproj.user
 .Rhistory
 .DS_Store
+
+# Ignore all HTML files
+*.html
+
+# Ignore RStudio project files
+*.Rproj
+
+# Ignore R environment files
+.RData
 .Rhistory
+.Rproj.user/
