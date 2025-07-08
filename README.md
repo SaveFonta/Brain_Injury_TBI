@@ -72,7 +72,7 @@ The required patient-level dataset is **not included** in this repository due to
 
 To visualize the expected structure and file names, refer to the following image:
 
-![Data File Structure](docs/structure.png)
+![structure](https://github.com/user-attachments/assets/8e8c8d80-0269-4d12-b735-90201cc2d0ad)
 
 
 
