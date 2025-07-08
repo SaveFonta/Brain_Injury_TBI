@@ -14,6 +14,7 @@ clean_path <- "02_data/02_clean_data/"
 
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 
+library(MASS)
 library(data.table)
 library(lme4)      # For mixed effects models
 library(lmerTest)  # For p-values in mixed models
@@ -66,7 +67,7 @@ Visual inspection and AIC BIC is what I will use.
 First we specify two variables with non proportional odds. Can be for example.
 ```{r}
 
-# Example: Allowing non-proportional odds for 'bleeding' and 'fracture'
+# Example:  non-proportional odds for 'bleeding' and 'fracture'
 model_clm <- clm(iss_cat ~ gcs_cat + invasive + sex + age_cat +
                      concussion + brain_edema + brain_compression +
                      unconsciousness,
@@ -118,13 +119,6 @@ ggplot(coef_data, aes(x = estimate, y = reorder(term, estimate), color = signifi
   ) +
   theme_minimal() +
   theme(legend.position = "bottom")
-
-tidy(model_clm) %>%
-  filter(grepl("bleeding|fracture", term)) %>%  # Focus on non-proportional terms
-  ggplot(aes(x = estimate, y = term, color = as.factor(gsub(".*\\|", "", term)))) +
-  geom_point() +
-  geom_errorbarh(aes(xmin = estimate - 1.96 * std.error, xmax = estimate + 1.96 * std.error)) +
-  labs(color = "ISS Threshold")
 ```
 
 
@@ -161,20 +155,68 @@ tidy(model_clm) %>%
   )
 ```
 
+ The model estimates cumulative log odds of being in a certain category or below vs. being in higher categories
+ 
+ 
+ Positive coefficient → increases odds of being in a lower severity category.
 
-gcs_cat: Worsening neurological status (from mild to severe) is significantly associated with higher injury severity scores. This relationship appears to have both linear and non-linear components.
+Negative coefficient → increases odds of being in a higher severity category
 
-Sex: Male patients have a statistically significant higher likelihood of being in a more severe injury category compared to female patients.
 
-Age Category (age_cat): The relationship between age category and injury severity is complex and non-linear, with several age groups showing significant associations with iss_cat.
 
-Concussion: Surprisingly, the presence of a concussion is associated with a statistically significant lower likelihood of being in a more severe injury category. I honestly dont know maybe makes sense? 
+gcs_cat: Higher GCS → Higher odds of being in a more severe ISS category.
+Quadratic (Q) and Cubic (C) terms also significant, suggesting non-linear effects.
 
-Invasive Procedures (invasive), Brain Edema (brain_edema), Brain Compression (brain_compression), and Unconsciousness (unconsciousness): These factors did not show statistically significant associations with injury severity in this model.
+Sex: Males have higher odds of severe ISS than females.
 
-Bleeding: The presence of bleeding consistently increases the likelihood of being in a higher injury severity category compared to being in a lower category. This effect is strongest when differentiating the lowest severity category from all others.
+Age::
+LINEAR: n general, increasing age is associated with lower injury severity (ISS). -> Older patients are less likely to be in the highest ISS categories compared to younger patients.
 
-Fracture: The impact of a fracture on injury severity varies. It strongly increases the likelihood of being in higher severity categories compared to the lowest. Notably, it also increases the likelihood of being in the highest severity category compared to the middle ones.
+Possible reasons:
+Survivorship bias (severe trauma is more lethal in older adults, so survivors have lower ISS).
+Older adults may experience less high-energy trauma (e.g., fewer car crashes, more low-energy falls).
+
+QUADRATIC: U-SHAPED relationship
+Middle-aged groups (e.g., 30–50 years) have the lowest ISS severity (bottom of the U-curve).
+Both younger and older patients trend toward higher severity
+
+CUBIC: not sign
+
+QUARTIC 
+Interpretation: A positive coefficient adds a "W-shape" to the U-curve, suggesting:
+Subgroups within age categories may have distinct risk patterns.
+Example: A "bump" in severity for very young (18–25) and very old (80+) patients.
+
+other terms not sign
+
+
+Concussion: Concussion → Lower odds of severe ISS (counterintuitive; may need clinical context).
+
+Invasive Procedures, Brain Edema, Brain Compression, and Unconsciousness: These factors did not show statistically significant associations with injury severity in this model.
+
+
+NON PROP:
+INTERCEPT: boundaries between ISS categories *when all predictors = 0* (reference groups):
+
+1.1-8|2.9-15: 0.063 (not significant, p ≈ 0.37)
+Weak separation between mild (1.1-8) and moderate (2.9-15) ISS.
+
+2.9-15|3.16-24: 1.773 (p < 0.001)
+Strong separation between moderate and severe ISS.
+
+3.16-24|4.25+: 3.341 (p < 0.001)
+Very strong separation between severe and critical ISS.
+
+
+
+
+Bleeding: Across all thresholds, bleeding increases the probability of being in more severe categories, with the largest effect at the lowest threshold (presence of bleeding strongly lowers the threshold between categories 1 and 2)
+
+Fracture: 
+1.1-8|2.9-15: A very strong effect: having a fracture greatly increases the odds of being in category 2 or higher, i.e., shifts you away from the least severe category.
+2.9-15 vs 3.16-24	-0.74	Also increases odds of being in category 3 or higher (vs. category 2), though the effect is smaller.
+3.16-24 vs 4.25+	+0.28	Opposite direction! This raises the threshold, making it slightly less likely to be in the most severe category (category 4), all else equal.
+
 
 
 
@@ -252,9 +294,6 @@ Even though the extended model is significantly bettrer, I decided to keep the e
 ## Final fit
 
 
-```{r}
-autoplot.clm(model_clm)
-```
 
 
 
@@ -306,10 +345,86 @@ caret::confusionMatrix(predicted, poly$iss_cat)
 
 
 ##############################
-MONOTOONE Trasformation of ais. Can be everything. Per sceglierlo guarda ai residui… i residui ci diono come trasformare la y
-Box e cox… ma poi non si perde linterpretazione?? 
+#ISS Continuotus
+```{r}
+hist(poly$iss)
+summary(poly$iss) #a bit skewed
+```
 
-model ais continuous try at least 
+```{r}
+model_lm <- lm(iss ~ sex + 
+                                 concussion + brain_edema +
+                                brain_compression + bleeding + fracture + gcs_cat +
+                                        invasive + age_cat + unconsciousness,
+                              data = poly)
+summary(model_lm)
+```
+
+
+
+```{r}
+plot(model_lm)
+```
+
+
+ to have a slightly better QQ-plot:
+```{r}
+model_log <- lm(log(iss) ~ sex + 
+                                 concussion + brain_edema +
+                                brain_compression + bleeding + fracture + gcs_cat +
+                                        invasive + age_cat + unconsciousness,
+                              data = poly)
+summary(model_log)
+plot(model_log)
+
+```
+All effects are interpreted multiplicatively on the ISS scale by exponentiating the coefficients.
+
+Sex (Male): Being male is associated with a 9.7% higher ISS on average compared to females, holding other variables constant (exp(0.093) ≈ 1.097).
+
+Concussion: The presence of a concussion is associated with a 14% decrease in ISS (exp(−0.150) ≈ 0.861), suggesting a protective or inverse relationship with severity.
+
+Bleeding: Bleeding is associated with a 59.5% increase in ISS on average (exp(0.467) ≈ 1.595), indicating it is a strong predictor of higher injury severity.
+
+Fracture: The presence of a fracture increases ISS by approximately 53.4% (exp(0.428) ≈ 1.534), also marking it as a strong positive predictor.
+
+GCS Score (gcs_cat):
+
+The linear trend (gcs_cat.L) shows that worse GCS scores (lower neurological status) are associated with 35.6% higher ISS (exp(0.305) ≈ 1.356).
+
+The other orthogonal polynomial terms (.Q, .C) suggest some non-linear effects but with smaller or less consistent influence.
+
+Age (age_cat):
+
+Only the second-order polynomial term (age_cat.Q) is statistically significant, showing that middle age groups may have 14.4% lower ISS (exp(−0.155) ≈ 0.857) relative to the reference trend, but the effect is non-linear and should be interpreted cautiously (IT WAS A BIT DIFFERENT FROM THE ORDINAL).
+
+Unconsciousness: Being unconscious is associated with a 22.8% higher ISS (exp(0.205) ≈ 1.228), reflecting greater injury severity. (IN THE ORDINAL IT WASNT SIGNIFICANT)
+
+Invasive procedures, brain edema, and brain compression did not show statistically significant associations with ISS in this model.
+
+
+
+
+# What if box and cox trafo??
+```{r}
+boxcox(model_lm, lambda = seq(-2, 2, 0.1))
+bc <- boxcox(model_lm, lambda = seq(-2, 2, 0.1), plotit = FALSE)
+optimal_lambda <- bc$x[which.max(bc$y)]
+optimal_lambda
+```
+
+ Use lambda = 0.3, since it's close to zero, instead of doing y^0.3, I would stick with log for interpretability. 
+
+
+# Residuals vs predictors
+```{r}
+for (var in c("gcs_cat", "invasive", "sex", 
+              "bleeding", "fracture", "concussion", "brain_edema", 
+              "brain_compression", "unconsciousness")) {
+  plot(poly[[var]], resid(model_lm), main = paste("Residuals vs", var), xlab = var, ylab = "Residuals")
+}
+
+```
 
 
 
@@ -319,29 +434,63 @@ model ais continuous try at least
 
 
 
+
+
+
+
+
+
+
+
+
+Robust regression makes any sense? 
+
+```{r}
+library(robustbase)
+model_rob <- lmrob(iss ~ sex + 
+                                 concussion + brain_edema +
+                                brain_compression + bleeding + fracture + gcs_cat +
+                                        invasive + age_cat + unconsciousness,
+                              data = poly, fast.s.large.n = Inf)
+summary(model_rob)
+plot(model_rob)
+```
+
+log + robust?? 
+
+
+
+Or adding the variable --> severe_thoracic_injury. I dont think it makes sense: iss is made up of AIS, so of course they are highly correlated
 
 
 ################################
 #TRY WITH CK (continuous outocome)
+Now I dont want to change anything here, I guess the results are similar to Vale's, so just wait for his questions and then implement what he found. Cause there are many missings and many outliers!
+Robreg + imputation maybe
+
+
+
   
 ```{r}
+#COUNT CK NAS
+sum(is.na(poly$ck))
 #DROP nas
 poly_ck <- poly %>% drop_na(ck)
 
 # Examine effects of ordered factors
 ggplot(poly_ck, aes(x=gcs_cat, y=ck)) +
   geom_boxplot() +
-  labs(title="Temperature by GCS Category", x="GCS Category", y="Ck") +
+  labs(title="Ck by GCS Category", x="GCS Category", y="Ck") +
   theme_minimal()
 
 ggplot(poly_ck, aes(x=iss_cat, y=ck)) +
   geom_boxplot() +
-  labs(title="Temperature by ISS Category", x="ISS Category", y="CK") +
+  labs(title="Ck by ISS Category", x="ISS Category", y="CK") +
   theme_minimal()
 
 ggplot(poly_ck, aes(x=age_cat, y=ck)) +
   geom_boxplot() +
-  labs(title="Temperature by Age Category", x="Age Category", y="CK") +
+  labs(title="Ck by Age Category", x="Age Category", y="CK") +
   theme_minimal()
 ```
  
