@@ -72,7 +72,7 @@ The required patient-level dataset is **not included** in this repository due to
 
 To visualize the expected structure and file names, refer to the following image:
 
-![Data File Structure](Brain_Injury_TBI/docs/structure.png)
+![Data File Structure](docs/structure.png)
 
 
 
