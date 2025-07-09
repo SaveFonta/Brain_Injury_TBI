@@ -83,7 +83,7 @@ The results provide **clinical insights and actionable recommendations** for tra
 
 If you prefer not to run any code and just want to view the final results, you can access the fully compiled report here:
 
-👉 [**Download Final Report (PDF)**](https://github.com/SaveFonta/Brain_Injury_TBI/blob/main/07_Report/Report_final.pdf)
+👉 [**Download Final Report (PDF)**](https://github.com/SaveFonta/Brain_Injury_TBI/raw/main/07_Report/Report_final.pdf)
 
 This document includes all major findings, methodology, statistical models, and clinical interpretations from the project.
 
@@ -218,17 +218,15 @@ The report is provided in the following formats:
 
 📄 **Note:** This `.Rmd` file generates the PDF/HTML report. You must **knit** it in RStudio to produce the final output.
 
+### 🧰 PDF Rendering Note
 
+To knit the PDF report (`Report_final_pdf.Rmd`), you need to have LaTeX installed. We recommend using the lightweight **TinyTeX** distribution, which works well with RMarkdown.
+
+You can install it by running:
+
+```r
+tinytex::install_tinytex()
+```
 ---
-
-
-
-## 📚 Citation
-
-If you use this work, please cite:
-
-> ETH Zurich MSc Statistics & Department of Traumatology, USZ (2025).  
-> *Traumatic Brain Injury in Polytrauma Patients: Statistical Analysis*.  
-> [GitHub repository](https://github.com/SaveFonta/Brain_Injury_TBI)
 
 
