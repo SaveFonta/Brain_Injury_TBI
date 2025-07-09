@@ -124,7 +124,7 @@ Run the following code in your R console to install all necessary packages:
 ```r
 install.packages(c(
   # Data Manipulation
-  "data.table", "dplyr", "tidyr", "tidyverse", "rio", "stringi", "strata"
+  "data.table", "dplyr", "tidyr", "tidyverse", "rio", "stringi", "strata",
   
   # Statistical Modeling
   "MASS", "car", "robustbase", "lme4", "lmerTest", "glmmTMB", 
@@ -134,7 +134,7 @@ install.packages(c(
   "ggplot2", "vcd", "eulerr", "lemon",
   
   # Reporting & Tables
-  "tableone", "knitr", "kableExtra", "tinytex"
+  "tableone", "knitr", "kableExtra", "tinytex",
   
   # Model Evaluation
   "pROC", "broom"
