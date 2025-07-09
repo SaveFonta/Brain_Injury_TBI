@@ -156,5 +156,19 @@ if (length(all_output_files) > 0) {
   log_message("WARNING: No output files found in clean directory!", "WARNING")
 }
 
+#  Run final cleaning script
+extra_script <- "06_models/data_prep.R"
+if (file.exists(extra_script)) {
+  log_message(paste("Running additional script:", extra_script), "INFO")
+  tryCatch({
+    source(extra_script)
+    log_message(paste("Script completed successfully:", extra_script), "SUCCESS")
+  }, error = function(e) {
+    log_message(paste("Script failed:", e$message), "ERROR")
+  })
+} else {
+  log_message(paste("Script not found:", extra_script), "ERROR")
+}
+
 log_message("\nData cleaning process completed", "HEADER")
 cat(paste("\nDetailed log saved to:", log_file, "\n"))
