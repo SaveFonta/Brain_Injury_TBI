@@ -4,14 +4,14 @@
 - [📌 Summary](#-summary)
 - [📂 Repository Structure](#-repository-structure)
 - [📄 Quick Access: Final Report (PDF)](#-quick-access-final-report-pdf)
-- [📥 How to Add Your Data](#-how-to-add-your-data)
-- [📊 About `03_spreadsheets/`](#-about-03_spreadsheets)
-- [🛠️ Requirements](#-requirements)
-- [🧹 Data Cleaning Workflow](#-data-cleaning-workflow)
-- [🔍 05_Exploration](#-05_exploration)
-- [🧠 06_Models](#-06_models)
-- [📄 07_Report — Final Results](#-07_report--final-results)
-- [📚 Citation](#-citation)
+- [🚀 Getting Started](#-getting-started)
+  - [📥 How to Add Your Data](#-how-to-add-your-data)
+  - [📊 About `03_spreadsheets/`](#-about-03_spreadsheets)
+  - [🛠️ Requirements](#-requirements)
+  - [🧹 Data Cleaning Workflow](#-data-cleaning-workflow)
+  - [🔍 05_Exploration/](#-05_exploration)
+  - [🧠 06_Models/](#-06_models)
+  - [📄 07_Report/ — Final Results](#-07_report--final-results)
 
 
   
@@ -86,6 +86,13 @@ If you prefer not to run any code and just want to view the final results, you c
 👉 [**Download Final Report (PDF)**](https://github.com/SaveFonta/Brain_Injury_TBI/raw/main/07_Report/Report_final.pdf)
 
 This document includes all major findings, methodology, statistical models, and clinical interpretations from the project.
+
+---
+
+
+# 🚀 Getting Started
+
+To explore or reproduce the project, follow these steps:
 
 ---
 
