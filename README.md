@@ -3,11 +3,16 @@
 ## 📚 Table of Contents
 - [📌 Summary](#-summary)
 - [📂 Repository Structure](#-repository-structure)
+- [📄 Quick Access: Final Report (PDF)](#-quick-access-final-report-pdf)
 - [📥 How to Add Your Data](#-how-to-add-your-data)
+- [📊 About `03_spreadsheets/`](#-about-03_spreadsheets)
+- [🛠️ Requirements](#-requirements)
 - [🧹 Data Cleaning Workflow](#-data-cleaning-workflow)
-- [🔍 Exploratory Analysis](#-05_exploration)
-- [🧠 Modeling](#-06_models)
-- [📄 Final Report](#-07_report--final-results)
+- [🔍 05_Exploration](#-05_exploration)
+- [🧠 06_Models](#-06_models)
+- [📄 07_Report — Final Results](#-07_report--final-results)
+- [📚 Citation](#-citation)
+
 
   
 ## 📌 Summary
@@ -31,7 +36,6 @@ The results provide **clinical insights and actionable recommendations** for tra
 ---
 
 ## 📂 Repository Structure
-/01_raw_data
 ```text
 .
 ├── 02_data/   # Data to use
@@ -73,6 +77,17 @@ The results provide **clinical insights and actionable recommendations** for tra
 
 ```
 
+---
+
+## 📄 Quick Access: Final Report (PDF)
+
+If you prefer not to run any code and just want to view the final results, you can access the fully compiled report here:
+
+👉 [**Download Final Report (PDF)**](https://github.com/SaveFonta/Brain_Injury_TBI/blob/main/07_Report/Report_final.pdf)
+
+This document includes all major findings, methodology, statistical models, and clinical interpretations from the project.
+
+---
 
 ## 📥 How to Add Your Data
 
@@ -86,80 +101,13 @@ The following diagram illustrates the expected naming and format of input data f
 
 > ℹ️ You must match these filenames and structures for the cleaning scripts to run correctly.
 
-
-
+--
 
 ## 📊 About `03_spreadsheets/`
 
 The folder `03_spreadsheets/` is used within the cleaning scripts `01_clean_diagnosen+mapping.Rmd` and `01_clean_vital+lab+patients.Rmd` as a **temporary inspection path**. You **do not** need to manually add or modify anything inside this folder.
 
 ---
-
-## 🧹 Data Cleaning Workflow
-
-All raw data must undergo preprocessing before modeling. The cleaning process is documented in a series of RMarkdown notebooks located in the `04_cleaning_notebooks/` folder. These scripts handle tasks such as:
-
-- Diagnoses processing (`Diagnosen.xlsx`)
-- Intervention and ISS data cleaning
-- Patient vitals, lab values, and demographic info
-
-You can run individual scripts as needed (e.g., `01_clean_diagnosen+mapping.Rmd` for diagnoses), which will clean and save specific datasets. However, since the cleaning process is **not the main focus** of this project, we provide a **master script** that runs the entire cleaning pipeline:
-`04_cleaning_notebooks/master_data_prep.R`
-
-
-
----
-## 🧹 Data Cleaning Workflow (continued)
-
-✅ After running the script, check that the cleaned files are correctly stored in:
-`02_data/02_clean_data`
-
-
----
-
-## 🔍 05_Exploration/
-
-The `05_Exploration/` folder contains various exploratory scripts we used to inspect and better understand the raw data. These analyses were helpful for identifying data inconsistencies, variable behavior, and modeling challenges.
-
-> ℹ️ This section is **less critical** for drawing final conclusions. It was primarily used for internal data comprehension.  
-
----
-
-## 🧠 06_Models/
-
-> 📌 **Important:**  
-Before running any model scripts, make sure to execute `06_Models/data_prep.R`.  
-This script creates the **final cleaned patient subpopulations** used in the final report and saved in `02_data/02_clean_data`:
-
-```r
-population.rds"
-population_poly.rds"
-population_tbi.rds"
-population_poly_tbi.rds"
-```
-
-
-The `06_Models/` folder also contains scripts and notebooks used to implement and test various statistical models, including:
-
-- Generalized Linear Mixed Models (GLMMs)
-- Robust regression models
-- Correlation analyses related to pathophysiological outcomes
-
-Users are welcome to explore these scripts for detailed implementation.  
-However, **the final versions of the models and their results are fully documented in the report** provided in the next section.
-
----
-
-## 📄 07_Report/ — Final Results
-
-The most important deliverable of this project is the **final report**, which consolidates all key results, methodology, and interpretation.
-
-The report is provided in the following formats:
-
-- 📄 **PDF**: `07_Report/Report_final_pdf.Rmd`
-- 🌐 **HTML**: `07_Report/Report_final_html.Rmd`
-
-
 
 ## 🛠️ Requirements
 
@@ -171,7 +119,7 @@ To run the analysis, ensure you have the following:
 
 ## Package Installation
 
-Run this command to install all required packages:
+Run the following code in your R console to install all necessary packages:
 
 ```r
 install.packages(c(
@@ -203,6 +151,84 @@ library(MASS)     # Load first
 library(tidyverse) # Load after to ensure select() isn't masked
 ```
 
+---
 
+## 🧹 Data Cleaning Workflow
+
+All raw data must undergo preprocessing before modeling. The cleaning process is documented in a series of RMarkdown notebooks located in the `04_cleaning_notebooks/` folder. These scripts handle tasks such as:
+
+- Diagnoses processing (`Diagnosen.xlsx`)
+- Intervention and ISS data cleaning
+- Patient vitals, lab values, and demographic info
+
+You can run individual scripts as needed (e.g., `01_clean_diagnosen+mapping.Rmd` for diagnoses), which will clean and save specific datasets. However, since the cleaning process is **not the main focus** of this project, we provide a **master script** that runs the entire cleaning pipeline:
+`04_cleaning_notebooks/master_data_prep.R`
+
+
+### ✅ Output Location
+
+After running the master script, verify that the cleaned files are correctly saved in:
+`02_data/02_clean_data`
+
+
+---
+
+## 🔍 05_Exploration/
+
+The `05_Exploration/` folder contains various exploratory scripts we used to inspect and better understand the raw data. These analyses were helpful for identifying data inconsistencies, variable behavior, and modeling challenges.
+
+> ℹ️ This section is **less critical** for drawing final conclusions. It was primarily used for internal data comprehension.  
+
+---
+
+## 🧠 06_Models/
+
+> 📌 **Important:**  
+Before running any model scripts, make sure to execute `06_Models/data_prep.R`.  
+This script creates the **final cleaned patient subpopulations** used in the final report and saved in `02_data/02_clean_data`:
+
+```r
+population.rds
+population_poly.rds
+population_tbi.rds
+population_poly_tbi.rds
+```
+
+
+The `06_Models/` folder also contains scripts and notebooks used to implement and test various statistical models, including:
+
+- Generalized Linear Mixed Models (GLMMs)
+- Robust regression models
+- Correlation analyses related to pathophysiological outcomes
+
+Users are welcome to explore these scripts for detailed implementation.  
+However, **the final versions of the models and their results are fully documented in the report** provided in the next section.
+
+---
+
+## 📄 07_Report/ — Final Results
+
+The most important deliverable of this project is the **final report**, which consolidates all key results, methodology, and interpretation.
+
+The report is provided in the following formats:
+
+- 📄 **PDF**: [`Report_final.pdf`](https://github.com/SaveFonta/Brain_Injury_TBI/blob/main/07_Report/Report_final.pdf)
+- 🌐 **HTML**: [`Report_final_html.Rmd`](07_Report/Report_final_html.Rmd) *(knit to produce HTML)*
+- ✍️ **Source RMarkdown**: `Report_final_pdf.Rmd`
+
+📄 **Note:** This `.Rmd` file generates the PDF/HTML report. You must **knit** it in RStudio to produce the final output.
+
+
+---
+
+
+
+## 📚 Citation
+
+If you use this work, please cite:
+
+> ETH Zurich MSc Statistics & Department of Traumatology, USZ (2025).  
+> *Traumatic Brain Injury in Polytrauma Patients: Statistical Analysis*.  
+> [GitHub repository](https://github.com/SaveFonta/Brain_Injury_TBI)
 
 
