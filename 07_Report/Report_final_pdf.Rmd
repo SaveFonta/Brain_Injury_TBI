@@ -30,7 +30,7 @@ library(tableone)
 library(knitr)
 library(kableExtra)
 library(eulerr)
-tinytex::install_tinytex() # for knitting
+library(tinytex) # for knitting
 # Load any additional libraries needed
 ```
 
