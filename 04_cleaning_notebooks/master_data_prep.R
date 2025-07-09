@@ -2,7 +2,7 @@
 
 "Just run, this and enjoy all the cleaned df created!!"
 
-
+library(strata)
 
 # Define the order of R Markdown files to run 
 rmarkdown_files <- c(
